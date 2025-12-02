@@ -1,5 +1,10 @@
 # Stamina Buyer
 
+[![Tests](https://github.com/YOUR_USERNAME/stamina-buyer/actions/workflows/test.yml/badge.svg)](https://github.com/YOUR_USERNAME/stamina-buyer/actions/workflows/test.yml)
+[![Build](https://github.com/YOUR_USERNAME/stamina-buyer/actions/workflows/build-releases.yml/badge.svg)](https://github.com/YOUR_USERNAME/stamina-buyer/actions/workflows/build-releases.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+
 Pipeline that automates stamina purchases from the Black Market inside Evony: The King's Return
 emulators. The tool captures emulator windows directly, analyzes them using OpenCV template 
 matching, and simulates clicks to buy stamina. **No ADB installation required!**

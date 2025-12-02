@@ -1,0 +1,201 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.1.0, v1.0.0, etc.
+
+permissions:
+  contents: write  # Needed to create releases
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[build]
+      
+      - name: Build executable
+        run: |
+          pyinstaller staminabuyer.spec
+      
+      - name: Rename executable
+        run: |
+          move dist\staminabuyer.exe dist\staminabuyer-windows.exe
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: staminabuyer-windows
+          path: dist/staminabuyer-windows.exe
+          retention-days: 1
+
+  build-macos:
+    name: Build macOS Executable
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[build]
+      
+      - name: Build executable
+        run: |
+          pyinstaller staminabuyer.spec
+      
+      - name: Make executable
+        run: |
+          chmod +x dist/staminabuyer
+      
+      - name: Rename executable
+        run: |
+          mv dist/staminabuyer dist/staminabuyer-macos
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: staminabuyer-macos
+          path: dist/staminabuyer-macos
+          retention-days: 1
+
+  build-linux:
+    name: Build Linux Executable
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[build]
+      
+      - name: Build executable
+        run: |
+          pyinstaller staminabuyer.spec
+      
+      - name: Make executable
+        run: |
+          chmod +x dist/staminabuyer
+      
+      - name: Rename executable
+        run: |
+          mv dist/staminabuyer dist/staminabuyer-linux
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: staminabuyer-linux
+          path: dist/staminabuyer-linux
+          retention-days: 1
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staminabuyer-windows
+          path: dist/
+      
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staminabuyer-macos
+          path: dist/
+      
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staminabuyer-linux
+          path: dist/
+      
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum staminabuyer-windows.exe > checksums.txt
+          sha256sum staminabuyer-macos >> checksums.txt
+          sha256sum staminabuyer-linux >> checksums.txt
+          cat checksums.txt
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/staminabuyer-windows.exe
+            dist/staminabuyer-macos
+            dist/staminabuyer-linux
+            dist/checksums.txt
+          body: |
+            ## 🎮 Stamina Buyer ${{ github.ref_name }}
+            
+            ### 📦 Downloads
+            
+            - **Windows:** `staminabuyer-windows.exe` - Just double-click to run!
+            - **macOS:** `staminabuyer-macos` - Run `chmod +x staminabuyer-macos` then `./staminabuyer-macos`
+            - **Linux:** `staminabuyer-linux` - Run `chmod +x staminabuyer-linux` then `./staminabuyer-linux`
+            
+            ### ✨ Features
+            
+            - 🎨 Modern GUI - No command-line knowledge needed
+            - ✨ Zero setup - No ADB installation required
+            - 🖥️ Universal - Works with all Android emulators
+            - 🔍 Smart detection - Computer vision powered
+            - 🚀 Multi-instance support
+            - 🧪 Dry-run testing mode
+            
+            ### 🚀 Quick Start
+            
+            1. Download the file for your platform
+            2. Make it executable (macOS/Linux: `chmod +x filename`)
+            3. Double-click to open the GUI
+            4. Click "Detect Windows" to find your emulator
+            5. Configure targets and click "Buy Stamina"
+            
+            ### 📝 Documentation
+            
+            - [Quick Start Guide](https://github.com/${{ github.repository }}/blob/main/QUICKSTART.md)
+            - [GUI Guide](https://github.com/${{ github.repository }}/blob/main/GUI_GUIDE.md)
+            - [Full README](https://github.com/${{ github.repository }}/blob/main/README.md)
+            
+            ### 🔒 Checksums
+            
+            See `checksums.txt` for SHA256 hashes to verify your download.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
