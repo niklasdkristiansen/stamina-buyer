@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Tuple
 
 try:
     import mss
@@ -22,10 +21,11 @@ except ImportError:
 
 try:
     # Windows-specific imports
+    from ctypes import windll
+
+    import win32con
     import win32gui
     import win32ui
-    import win32con
-    from ctypes import windll
     
     HAS_WIN32 = True
 except ImportError:
@@ -181,7 +181,7 @@ class ScreenCaptureClient:
         # Small delay to let the click register
         time.sleep(0.05)
     
-    def get_window_size(self) -> Tuple[int, int]:
+    def get_window_size(self) -> tuple[int, int]:
         """
         Get the emulator window size.
         

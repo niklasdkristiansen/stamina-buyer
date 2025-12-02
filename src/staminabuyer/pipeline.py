@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
-from typing import Callable, List, Sequence
 
 from rich.console import Console
 from rich.table import Table
@@ -38,7 +38,7 @@ class PipelineResult:
     name: str
     requested: int
     purchased: int
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
     @property
     def successful(self) -> bool:
@@ -67,8 +67,8 @@ class PipelineRunner:
             descriptor_min_matches=options.descriptor_min_matches,
         )
 
-    def run(self, targets: Sequence[EmulatorTarget]) -> List[PipelineResult]:
-        results: List[PipelineResult] = []
+    def run(self, targets: Sequence[EmulatorTarget]) -> list[PipelineResult]:
+        results: list[PipelineResult] = []
         for target in targets:
             result = self._process_target(target)
             results.append(result)
@@ -87,7 +87,7 @@ class PipelineRunner:
 
         client = self._client_factory(target.name)
         purchased = 0
-        errors: List[str] = []
+        errors: list[str] = []
 
         try:
             purchased = self._execute_purchase_loop(client, target)
@@ -96,7 +96,7 @@ class PipelineRunner:
 
         return PipelineResult(name=target.name, requested=target.stamina, purchased=purchased, errors=errors)
 
-    def _execute_purchase_loop(self, client: ADBClient, target: EmulatorTarget) -> int:
+    def _execute_purchase_loop(self, client: ScreenCaptureClient, target: EmulatorTarget) -> int:
         """Buy stamina packs by matching templates and tapping confirm dialogs."""
 
         pack_size = self.options.pack_size
@@ -148,7 +148,7 @@ class PipelineRunner:
         if delay > 0:
             time.sleep(delay)
 
-    def _match_with_retry(self, client: ADBClient, icon_name: str) -> MatchResult:
+    def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
         if not self._templates.has_template(icon_name):
             raise RuntimeError(f"Template '{icon_name}' is not available in assets/icons.")
 
@@ -171,15 +171,15 @@ class PipelineRunner:
 
         raise RuntimeError(f"Failed to locate '{icon_name}' after {self.options.max_retries} retries.")
 
-    def _tap_center(self, client: ADBClient, match: MatchResult) -> None:
+    def _tap_center(self, client: ScreenCaptureClient, match: MatchResult) -> None:
         self._tap_within_match(client, match, vertical_ratio=0.5)
 
-    def _tap_gem_button(self, client: ADBClient, match: MatchResult) -> None:
+    def _tap_gem_button(self, client: ScreenCaptureClient, match: MatchResult) -> None:
         ratio = self.options.gem_button_vertical_ratio
         ratio = min(max(ratio, 0.0), 1.0)
         self._tap_within_match(client, match, vertical_ratio=ratio)
 
-    def _tap_within_match(self, client: ADBClient, match: MatchResult, vertical_ratio: float) -> None:
+    def _tap_within_match(self, client: ScreenCaptureClient, match: MatchResult, vertical_ratio: float) -> None:
         width = match.bottom_right[0] - match.top_left[0]
         height = match.bottom_right[1] - match.top_left[1]
         tap_x = match.top_left[0] + width // 2

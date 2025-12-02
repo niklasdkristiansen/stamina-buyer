@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Sequence
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -23,7 +23,7 @@ class EmulatorTarget(BaseModel):
 class FileConfig(BaseModel):
     """Schema for config files loaded from YAML/JSON."""
 
-    targets: List[EmulatorTarget]
+    targets: list[EmulatorTarget]
     purchase_delay_seconds: float = Field(default=1.0, ge=0.0)
     jitter_seconds: float = Field(default=0.2, ge=0.0)
 
@@ -32,7 +32,7 @@ class FileConfig(BaseModel):
 class ResolvedConfiguration:
     """Merged runtime configuration."""
 
-    targets: List[EmulatorTarget]
+    targets: list[EmulatorTarget]
     purchase_delay_seconds: float
     jitter_seconds: float
 
@@ -54,7 +54,7 @@ def parse_target_argument(raw: str) -> EmulatorTarget:
     return EmulatorTarget(name=name.strip(), stamina=stamina)
 
 
-def parse_targets(arguments: Sequence[str]) -> List[EmulatorTarget]:
+def parse_targets(arguments: Sequence[str]) -> list[EmulatorTarget]:
     """Parse all CLI target entries."""
 
     return [parse_target_argument(arg) for arg in arguments]

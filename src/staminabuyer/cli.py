@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -13,7 +12,9 @@ from . import get_version
 from .config import ResolvedConfiguration, resolve_configuration
 from .pipeline import PipelineOptions, PipelineRunner
 
-app = typer.Typer(help="Automate Evony Black Market stamina purchases across emulators (no ADB required).")
+app = typer.Typer(
+    help="Automate Evony Black Market stamina purchases across emulators (no ADB required)."
+)
 console = Console()
 
 
@@ -39,28 +40,34 @@ def gui() -> None:
     """Launch the graphical user interface (recommended for most users)."""
     try:
         from .gui import launch_gui
+
         launch_gui()
-    except ImportError:
+    except ImportError as exc:
         console.print("[red]GUI dependencies not installed.[/red]")
         console.print("Install with: pip install customtkinter")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
 def list_windows() -> None:
     """List all visible emulator windows to help identify window titles."""
     try:
-        from .emulator.screen_capture import find_emulator_windows, list_windows as list_all_windows
-        
+        from .emulator.screen_capture import (
+            find_emulator_windows,
+        )
+        from .emulator.screen_capture import (
+            list_windows as list_all_windows,
+        )
+
         console.print("\n[bold cyan]Searching for emulator windows...[/bold cyan]\n")
-        
+
         emulator_windows = find_emulator_windows()
-        
+
         if emulator_windows:
             console.print("[bold green]Found emulator windows:[/bold green]")
             for window in emulator_windows:
                 console.print(f"  • [yellow]{window}[/yellow]")
-            
+
             console.print("\n[dim]Use these window titles with --target, e.g.:[/dim]")
             console.print(f"[dim]  staminabuyer run --target \"{emulator_windows[0]}:100\"[/dim]")
         else:
@@ -69,27 +76,30 @@ def list_windows() -> None:
             all_windows = list_all_windows()
             for window in all_windows[:20]:  # Show first 20
                 console.print(f"  • {window}")
-            
+
             if len(all_windows) > 20:
                 console.print(f"\n[dim]...and {len(all_windows) - 20} more[/dim]")
-            
+
             console.print("\n[dim]Look for your emulator window title above.[/dim]")
-    
-    except ImportError:
+
+    except ImportError as exc:
         console.print("[red]Screen capture dependencies not installed.[/red]")
         console.print("Install with: pip install -e .[screencapture]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
 def run(
-    target: List[str] = typer.Option(
-        [], "--target", "-t", help="Repeatable <window_title>:<stamina_to_buy> (e.g. 'BlueStacks:100')"
+    target: list[str] = typer.Option(
+        [],
+        "--target",
+        "-t",
+        help="Repeatable <window_title>:<stamina_to_buy> (e.g. 'BlueStacks:100')",
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None,
         "--config",
         "-c",
@@ -98,7 +108,9 @@ def run(
         exists=False,
         help="Optional YAML/JSON config file containing targets and defaults.",
     ),
-    dry_run: bool = typer.Option(False, help="Test detection without clicking (recommended first run)."),
+    dry_run: bool = typer.Option(
+        False, help="Test detection without clicking (recommended first run)."
+    ),
     max_retries: int = typer.Option(3, min=1, help="Maximum retries when detection fails."),
 ) -> None:
     """Buy stamina from Black Market by detecting the window and clicking automatically.

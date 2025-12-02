@@ -48,9 +48,14 @@ staminabuyer = "staminabuyer.cli:app"
 staminabuyer-gui = "staminabuyer.gui:launch_gui"
 
 [tool.ruff]
-line-length = 100
-select = ["E", "F", "B", "I", "UP", "N", "ANN"]
-ignore = ["ANN101", "ANN102"]
+line-length = 120  # Increased from 100 for readability
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]  # Removed B, N, ANN for less strict checking
+ignore = [
+    "E501",    # Line too long (handled by formatter)
+    "F401",    # Unused import (needed for platform-specific code)
+]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -15,8 +15,8 @@ import numpy as np
 class MatchResult:
     icon: str
     score: float
-    top_left: Tuple[int, int]
-    bottom_right: Tuple[int, int]
+    top_left: tuple[int, int]
+    bottom_right: tuple[int, int]
     scale: float = 1.0
 
 
@@ -55,7 +55,7 @@ class TemplateLibrary:
         self.descriptor_min_matches = descriptor_min_matches
         self._orb = cv2.ORB_create()
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        self._templates: Dict[str, Dict[float, TemplateVariant]] = {}
+        self._templates: dict[str, dict[float, TemplateVariant]] = {}
         self._logger = logging.getLogger(__name__)
         self.reload()
 
@@ -68,7 +68,7 @@ class TemplateLibrary:
             if image is None:
                 continue
             prepared = self._prepare_template(image)
-            variants: Dict[float, TemplateVariant] = {}
+            variants: dict[float, TemplateVariant] = {}
             for scale in self.scales:
                 match_image = self._scale_template(prepared, scale)
                 color_image = self._scale_template(image, scale)
@@ -88,7 +88,7 @@ class TemplateLibrary:
 
         return icon_name in self._templates
 
-    def _decode_frame(self, frame: bytes) -> Tuple[np.ndarray, np.ndarray]:
+    def _decode_frame(self, frame: bytes) -> tuple[np.ndarray, np.ndarray]:
         array = np.frombuffer(frame, dtype=np.uint8)
         color_frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if color_frame is None:
@@ -115,9 +115,9 @@ class TemplateLibrary:
         interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
         return cv2.resize(image, (new_width, new_height), interpolation=interpolation)
 
-    def match(self, frame: bytes, icon_names: Iterable[str]) -> List[MatchResult]:
+    def match(self, frame: bytes, icon_names: Iterable[str]) -> list[MatchResult]:
         color_frame, decoded = self._decode_frame(frame)
-        matches: List[MatchResult] = []
+        matches: list[MatchResult] = []
         best_score = 0.0
         best_icon = None
         best_scale = 1.0
@@ -190,7 +190,7 @@ class TemplateLibrary:
         self,
         frame_color: np.ndarray,
         variant: TemplateVariant,
-        top_left: Tuple[int, int],
+        top_left: tuple[int, int],
         width: int,
         height: int,
     ) -> bool:

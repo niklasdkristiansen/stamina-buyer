@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 
 class ADBError(RuntimeError):

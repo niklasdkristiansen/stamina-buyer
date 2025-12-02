@@ -10,9 +10,8 @@ Provides a user-friendly interface for:
 
 from __future__ import annotations
 
-import threading
 import sys
-from pathlib import Path
+import threading
 from queue import Queue
 from typing import Any
 
@@ -24,9 +23,8 @@ try:
 except ImportError:
     HAS_GUI_DEPS = False
 
+
 from rich.console import Console
-from rich.logging import RichHandler
-import logging
 
 from .config import EmulatorTarget
 from .pipeline import PipelineOptions, PipelineRunner
