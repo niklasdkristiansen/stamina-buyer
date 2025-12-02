@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+
+# Environment
+.env
+.env.local
+*.local
+
+# Build artifacts
+dist/
+build/
+*.spec.bak
+*.spec~
+
+# PyInstaller
+*.manifest
+*.spec~
+
+# Backup files created during development
+*_OLD_BACKUP*
+*_TEMP*
+debug_*.png
+visualization_*.png
+extracted_*.png
+region_*.png
+test_screenshot.png
+
+# Documentation builds
+docs/_build/
+
+# Logs
+*.log

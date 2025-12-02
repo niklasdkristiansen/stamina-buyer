@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stamina-buyer"
+version = "0.1.0"
+description = "Headless pipeline that automates Black Market stamina purchases in Evony emulators via ADB and in-memory vision."
+readme = "README.md"
+authors = [{ name = "Stamina Buyer" }]
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]>=0.12.3",
+    "pydantic>=2.7.0",
+    "opencv-python>=4.10.0",
+    "numpy>=2.0.0",
+    "Pillow>=10.3.0",
+    "rich>=13.7.0",
+    "PyYAML>=6.0.0",
+    # Screen capture (no ADB required!)
+    "mss>=9.0.0",
+    "pyautogui>=0.9.54",
+    "pywin32>=306; platform_system=='Windows'",
+    # GUI
+    "customtkinter>=5.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-mock>=3.12.0",
+    "ruff>=0.5.0"
+]
+build = [
+    "pyinstaller>=6.0.0",
+    "build>=1.0.0"
+]
+# ADB-free mode: Direct screen capture and mouse automation
+screencapture = [
+    "mss>=9.0.0",
+    "pyautogui>=0.9.54",
+    "pywin32>=306; platform_system=='Windows'",
+]
+
+[project.scripts]
+staminabuyer = "staminabuyer.cli:app"
+staminabuyer-gui = "staminabuyer.gui:launch_gui"
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "B", "I", "UP", "N", "ANN"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/staminabuyer"]
+
