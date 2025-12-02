@@ -277,27 +277,48 @@ class StaminaBuyerGUI(ctk.CTk):
                 all_windows = []
             
             # Now find emulator windows
-            windows = find_emulator_windows()
+            emulator_windows = find_emulator_windows()
             
-            if windows:
-                self.window_dropdown.configure(values=windows)
-                self.window_dropdown.set(windows[0])
-                self._log(f"✅ Found {len(windows)} emulator window(s)")
-                for window in windows:
-                    self._log(f"   • {window}")
-            else:
-                self.window_dropdown.configure(values=["No emulators found"])
-                self.window_dropdown.set("No emulators found")
-                self._log("⚠️ No emulator windows detected")
-                self._log("   Make sure your emulator is running and visible")
+            # Always show all windows for debugging
+            if all_windows:
+                self._log("")
+                self._log("   📋 All detected windows (first 20):")
+                for window in all_windows[:20]:
+                    # Mark emulator windows with a star
+                    marker = "⭐" if window in emulator_windows else "  "
+                    self._log(f"      {marker} {window}")
+                if len(all_windows) > 20:
+                    self._log(f"      ... and {len(all_windows) - 20} more")
+                self._log("")
+            
+            # Populate dropdown with ALL windows, but put emulator windows first
+            if all_windows:
+                # Sort: emulator windows first, then all others
+                sorted_windows = []
+                if emulator_windows:
+                    sorted_windows.extend(emulator_windows)
+                    sorted_windows.append("---")  # Separator
                 
-                # Show some windows for debugging if available
-                if all_windows:
-                    self._log("   📋 Sample of detected windows (first 15):")
-                    for window in all_windows[:15]:
-                        self._log(f"      - {window}")
-                    if len(all_windows) > 15:
-                        self._log(f"      ... and {len(all_windows) - 15} more")
+                # Add non-emulator windows
+                for window in all_windows:
+                    if window not in emulator_windows:
+                        sorted_windows.append(window)
+                
+                self.window_dropdown.configure(values=sorted_windows)
+                self.window_dropdown.set(sorted_windows[0])
+                
+                if emulator_windows:
+                    self._log(f"✅ Found {len(emulator_windows)} emulator window(s) (matching keywords)")
+                    for window in emulator_windows:
+                        self._log(f"   ⭐ {window}")
+                    self._log(f"   ℹ️  All {len(all_windows)} windows available in dropdown")
+                else:
+                    self._log("⚠️ No emulator keywords matched")
+                    self._log(f"   ℹ️  Showing all {len(all_windows)} windows - select any window manually")
+            else:
+                self.window_dropdown.configure(values=["No windows found"])
+                self.window_dropdown.set("No windows found")
+                self._log("❌ No windows detected at all")
         
         except Exception as e:
             import traceback
