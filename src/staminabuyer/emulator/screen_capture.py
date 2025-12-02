@@ -28,8 +28,9 @@ try:
     import win32ui
     
     HAS_WIN32 = True
-except ImportError:
+except ImportError as e:
     HAS_WIN32 = False
+    WIN32_IMPORT_ERROR = str(e)
 
 
 @dataclass
@@ -213,10 +214,16 @@ def list_windows() -> list[str]:
         win32gui.EnumWindows(enum_callback, windows)
         return windows
     else:
-        raise RuntimeError(
-            "Window listing not available on this platform. "
-            "Manually specify your emulator window title."
+        import sys
+        error_msg = (
+            f"Window listing not available on this platform ({sys.platform}). "
         )
+        if 'WIN32_IMPORT_ERROR' in globals():
+            error_msg += f"\nWin32 import error: {WIN32_IMPORT_ERROR}"
+            error_msg += "\nInstall pywin32: pip install pywin32"
+        else:
+            error_msg += "Manually specify your emulator window title."
+        raise RuntimeError(error_msg)
 
 
 def find_emulator_windows() -> list[str]:
@@ -228,12 +235,16 @@ def find_emulator_windows() -> list[str]:
     """
     emulator_keywords = [
         "bluestacks",
+        "blue stacks",
+        "bstk",  # BlueStacks abbreviation
         "ldplayer",
         "noxplayer",
+        "nox",
         "memu",
         "mumu",
         "android",
         "emulator",
+        "evony",  # Game-specific
     ]
     
     all_windows = list_windows()

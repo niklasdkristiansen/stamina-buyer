@@ -260,8 +260,17 @@ class StaminaBuyerGUI(ctk.CTk):
         self._log("🔍 Detecting emulator windows...")
         
         try:
-            from .emulator.screen_capture import find_emulator_windows
+            from .emulator.screen_capture import find_emulator_windows, list_windows
             
+            # First, try to list all windows for debugging
+            try:
+                all_windows = list_windows()
+                self._log(f"📋 Found {len(all_windows)} total windows")
+            except Exception as e:
+                self._log(f"⚠️ Could not list windows: {e}")
+                all_windows = []
+            
+            # Now find emulator windows
             windows = find_emulator_windows()
             
             if windows:
@@ -275,9 +284,17 @@ class StaminaBuyerGUI(ctk.CTk):
                 self.window_dropdown.set("No emulators found")
                 self._log("⚠️ No emulator windows detected")
                 self._log("   Make sure your emulator is running and visible")
+                
+                # Show some windows for debugging if available
+                if all_windows:
+                    self._log("   📋 Sample of detected windows (first 10):")
+                    for window in all_windows[:10]:
+                        self._log(f"      - {window}")
         
         except Exception as e:
+            import traceback
             self._log(f"❌ Error detecting windows: {e}")
+            self._log(f"   Details: {traceback.format_exc()}")
     
     def _add_target(self):
         """Add a target to the list."""
