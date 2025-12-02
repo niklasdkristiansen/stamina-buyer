@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+def get_assets_path() -> Path:
+    """
+    Get the correct path to assets, whether running from source or as PyInstaller executable.
+    
+    Returns:
+        Path to the assets directory
+    """
+    # When running as a PyInstaller bundle, assets are in sys._MEIPASS
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running as PyInstaller executable
+        base_path = Path(sys._MEIPASS)
+        return base_path / "assets" / "icons"
+    else:
+        # Running from source - go up from this file to project root
+        # matcher.py is in src/staminabuyer/vision/
+        # We want to go to project_root/assets/icons
+        return Path(__file__).parent.parent.parent.parent / "assets" / "icons"
 
 
 @dataclass(slots=True)
@@ -41,7 +61,7 @@ class TemplateLibrary:
         descriptor_ratio: float = 0.75,
         descriptor_min_matches: int = 10,
     ) -> None:
-        self.template_dir = template_dir or Path.cwd() / "assets" / "icons"
+        self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
         self.scales = tuple(sorted({scale for scale in (scales or (1.0,)) if scale > 0}))
         if not self.scales:
@@ -61,12 +81,21 @@ class TemplateLibrary:
 
     def reload(self) -> None:
         self._templates.clear()
+        self._logger.info(f"Loading templates from: {self.template_dir}")
+        
         if not self.template_dir.exists():
+            self._logger.warning(f"Template directory does not exist: {self.template_dir}")
             return
-        for path in self.template_dir.glob("*.png"):
+        
+        template_files = list(self.template_dir.glob("*.png"))
+        self._logger.info(f"Found {len(template_files)} template files")
+        
+        for path in template_files:
             image = cv2.imread(str(path), cv2.IMREAD_COLOR)
             if image is None:
+                self._logger.warning(f"Could not read template: {path}")
                 continue
+            
             prepared = self._prepare_template(image)
             variants: dict[float, TemplateVariant] = {}
             for scale in self.scales:
@@ -82,6 +111,9 @@ class TemplateLibrary:
                     match_image=match_image, color_image=color_image, descriptors=descriptors
                 )
             self._templates[path.stem] = variants
+            self._logger.debug(f"Loaded template '{path.stem}' with {len(variants)} scale variants")
+        
+        self._logger.info(f"Successfully loaded {len(self._templates)} templates: {list(self._templates.keys())}")
 
     def has_template(self, icon_name: str) -> bool:
         """Return True when a template is available for the given icon."""
