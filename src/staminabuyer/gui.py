@@ -260,12 +260,18 @@ class StaminaBuyerGUI(ctk.CTk):
         self._log("🔍 Detecting emulator windows...")
         
         try:
-            from .emulator.screen_capture import find_emulator_windows, list_windows
+            from .emulator.screen_capture import find_emulator_windows, list_windows, list_windows_debug
             
-            # First, try to list all windows for debugging
+            # First, try to list all windows for debugging with stats
             try:
-                all_windows = list_windows()
-                self._log(f"📋 Found {len(all_windows)} total windows")
+                all_windows, stats = list_windows_debug()
+                self._log(f"📋 Window enumeration stats:")
+                self._log(f"   Total windows checked: {stats['total_checked']}")
+                self._log(f"   Visible windows: {stats['visible']}")
+                self._log(f"   Windows with titles: {stats['with_title']}")
+                if stats['errors'] > 0:
+                    self._log(f"   Errors: {stats['errors']}")
+                self._log(f"   Found {len(all_windows)} total windows")
             except Exception as e:
                 self._log(f"⚠️ Could not list windows: {e}")
                 all_windows = []
@@ -287,9 +293,11 @@ class StaminaBuyerGUI(ctk.CTk):
                 
                 # Show some windows for debugging if available
                 if all_windows:
-                    self._log("   📋 Sample of detected windows (first 10):")
-                    for window in all_windows[:10]:
+                    self._log("   📋 Sample of detected windows (first 15):")
+                    for window in all_windows[:15]:
                         self._log(f"      - {window}")
+                    if len(all_windows) > 15:
+                        self._log(f"      ... and {len(all_windows) - 15} more")
         
         except Exception as e:
             import traceback
