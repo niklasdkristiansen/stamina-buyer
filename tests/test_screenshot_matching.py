@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Test template matching against the actual Black Market screenshot."""
+"""
+Test template matching against the actual Black Market screenshot.
+
+Tests both positive matching (finding stamina items) and negative matching
+(not detecting non-stamina items as stamina).
+
+Available stamina templates:
+- stamina_10: 10 packs × 50 = 500 stamina
+- stamina_1: 1 pack × 50 = 50 stamina
+"""
 
 from pathlib import Path
 import sys
@@ -8,6 +17,67 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from staminabuyer.vision.matcher import TemplateLibrary
+
+def test_negative_matching():
+    """Test that non-stamina items are NOT matched as stamina (no false positives)."""
+    
+    print("=" * 80)
+    print("NEGATIVE TESTS: Ensuring false positives don't occur")
+    print("=" * 80)
+    print()
+    
+    library = TemplateLibrary(
+        threshold=0.6,
+        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        grayscale=True,
+    )
+    
+    # Lower threshold library for bought template checking
+    library_low = TemplateLibrary(
+        threshold=0.3,
+        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        grayscale=True,
+    )
+    
+    test_files = [
+        ("not_stamina_2.png", "stamina_10", library, "non-stamina item (boots)"),
+        ("stamina_10_bought.png", "stamina_10", library, "already purchased stamina_10"),
+        ("screenshot-bm.png", "stamina_10_bought", library_low, "regular unbought stamina (shouldn't match bought)"),
+    ]
+    
+    all_passed = True
+    
+    for filename, template, lib, description in test_files:
+        test_path = Path(__file__).parent.parent / "assets" / "icons" / filename
+        
+        if not test_path.exists():
+            print(f"⚠️  Warning: {filename} not found, skipping")
+            print()
+            continue
+        
+        print(f"Testing: {filename} ({description})")
+        
+        test_bytes = test_path.read_bytes()
+        matches = lib.match(test_bytes, [template])
+        
+        if matches:
+            best_score = matches[0].score
+            # Special handling for bought template on regular items
+            if template == "stamina_10_bought" and best_score < 0.3:
+                print(f"  ✅ CORRECT! Bought template score too low ({best_score:.4f} < 0.3)")
+                print(f"     Regular items won't be mistaken as bought")
+            else:
+                print(f"  ❌ FALSE POSITIVE! Incorrectly matched as {template}:")
+                for match in matches[:3]:
+                    print(f"     Score: {match.score:.4f}, Scale: {match.scale:.2f}x")
+                print(f"  This is BAD - {description}!")
+                all_passed = False
+        else:
+            print(f"  ✅ CORRECT! Not matched as {template}")
+        
+        print()
+    
+    return all_passed
 
 def test_screenshot_matching():
     """Test if we can find stamina_10 in the Black Market screenshot."""
@@ -27,7 +97,7 @@ def test_screenshot_matching():
     print(f"Screenshot size: {len(screenshot_bytes)} bytes")
     print()
     
-    # Test with different thresholds
+    # Test with different thresholds for both stamina types
     test_configs = [
         ("Original (0.7)", 0.7),
         ("Current (0.6)", 0.6),
@@ -91,6 +161,29 @@ def test_screenshot_matching():
     return True
 
 if __name__ == "__main__":
-    success = test_screenshot_matching()
-    sys.exit(0 if success else 1)
+    # Run negative test first
+    print()
+    negative_pass = test_negative_matching()
+    
+    print()
+    print()
+    
+    # Run positive test
+    positive_pass = test_screenshot_matching()
+    
+    # Overall result
+    print()
+    print("=" * 80)
+    print("OVERALL RESULTS")
+    print("=" * 80)
+    print(f"Negative test (not_stamina_2.png should NOT match): {'✅ PASS' if negative_pass else '❌ FAIL'}")
+    print(f"Positive test (screenshot-bm.png should match):     {'✅ PASS' if positive_pass else '❌ FAIL'}")
+    print()
+    
+    if negative_pass and positive_pass:
+        print("🎉 All tests PASSED!")
+        sys.exit(0)
+    else:
+        print("⚠️  Some tests FAILED")
+        sys.exit(1)
 

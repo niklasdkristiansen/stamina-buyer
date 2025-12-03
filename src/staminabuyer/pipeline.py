@@ -17,6 +17,21 @@ from .emulator.screen_capture import ScreenCaptureClient
 from .vision.matcher import MatchResult, TemplateLibrary
 
 
+@dataclass
+class StaminaItem:
+    """Represents a stamina item available in the Black Market."""
+    template_name: str
+    stamina_amount: int
+    bought_template_name: str | None = None  # Template for already-purchased version
+    
+    
+# Available stamina items (prioritized by efficiency)
+STAMINA_ITEMS = [
+    StaminaItem("stamina_10", 500, "stamina_10_bought"),  # 10 packs × 50 = 500 stamina
+    StaminaItem("stamina_1", 50, "stamina_1_bought"),    # 1 pack × 50 = 50 stamina
+]
+
+
 @dataclass(slots=True)
 class PipelineOptions:
     dry_run: bool = False
@@ -28,9 +43,7 @@ class PipelineOptions:
     refresh_button_icon: str = "refresh"
     max_refreshes: int = 100  # Maximum times to refresh the Black Market (can take 50-100+ tries)
     template_dir: Path | None = None
-    stamina_pack_icon: str = "stamina_10"
     confirm_icon_name: str = "to_confirm"
-    pack_size: int = 500  # stamina_10 = 10 packs × 50 stamina = 500 total
     gem_button_vertical_ratio: float = 0.9
     template_threshold: float = 0.6  # Lowered from 0.7 for better detection
     descriptor_min_matches: int = 10
@@ -108,28 +121,21 @@ class PipelineRunner:
         client.focus_window()
         """Buy stamina packs by matching templates and tapping confirm dialogs."""
 
-        pack_size = self.options.pack_size
-        if pack_size <= 0:
-            raise ValueError("PipelineOptions.pack_size must be greater than zero.")
-
-        packs_needed = ceil(target.stamina / pack_size)
         purchased = 0
+        purchase_count = 0
         
-        # Warn if we'll buy more than requested
-        if packs_needed * pack_size > target.stamina:
-            actual_amount = packs_needed * pack_size
+        # Keep buying until we reach the target
+        while purchased < target.stamina:
+            purchase_count += 1
+            remaining = target.stamina - purchased
+            
             self.console.log(
-                f"[yellow]Note: Will buy {actual_amount} stamina ({packs_needed} items × {pack_size}) "
-                f"to meet request of {target.stamina}[/yellow]"
-            )
-
-        for attempt in range(1, packs_needed + 1):
-            self.console.log(
-                f"Buying item {attempt}/{packs_needed} for '{target.name}' ({pack_size} stamina per item)."
+                f"Purchase #{purchase_count} for '{target.name}' "
+                f"(have {purchased}/{target.stamina} stamina, need {remaining} more)"
             )
             
-            # Try to find stamina, refresh if needed
-            pack_match = self._find_stamina_with_refresh(client)
+            # Try to find any available stamina item, refresh if needed
+            pack_match, stamina_item = self._find_stamina_with_refresh(client)
             
             # Click the stamina item
             self._tap_gem_button(client, pack_match)
@@ -143,13 +149,21 @@ class PipelineRunner:
             confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
             self._tap_center(client, confirm_match)
 
-            purchased += pack_size
+            # Update purchased amount
+            purchased += stamina_item.stamina_amount
+            self.console.log(
+                f"✅ Purchased {stamina_item.stamina_amount} stamina. "
+                f"Total: {purchased}/{target.stamina}"
+            )
             
-            # Wait for purchase to complete and UI to update
-            if attempt < packs_needed:  # Don't wait after the last purchase
-                delay = self.options.post_purchase_delay_seconds
-                self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
-                time.sleep(delay)
+            # Check if we're done
+            if purchased >= target.stamina:
+                break
+            
+            # Wait for purchase to complete and UI to update before next purchase
+            delay = self.options.post_purchase_delay_seconds
+            self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
+            time.sleep(delay)
 
         return purchased
 
@@ -180,36 +194,65 @@ class PipelineRunner:
         if delay > 0:
             time.sleep(delay)
 
-    def _find_stamina_with_refresh(self, client: ScreenCaptureClient) -> MatchResult:
+    def _find_stamina_with_refresh(self, client: ScreenCaptureClient) -> tuple[MatchResult, StaminaItem]:
         """
-        Try to find stamina item. If not found, refresh the Black Market and retry.
+        Try to find any stamina item. If not found, refresh the Black Market and retry.
+        
+        Also checks for "bought" versions and skips them (they can't be purchased again).
         
         Returns:
-            MatchResult for the stamina item
+            Tuple of (MatchResult, StaminaItem) for the found stamina
             
         Raises:
             RuntimeError: If stamina cannot be found after refreshing
         """
-        icon_name = self.options.stamina_pack_icon
-        
         for refresh_attempt in range(self.options.max_refreshes + 1):
-            # Try to find stamina (first attempt or after refresh)
+            # Try to find any stamina item (try in priority order)
             frame = client.screencap()
-            matches = self._templates.match(frame, [icon_name])
             
-            if matches:
-                match = matches[0]
-                self.console.log(
-                    f"Found '{icon_name}' with score {match.score:.3f} "
-                    f"at {match.top_left}->{match.bottom_right}."
-                )
-                return match
+            for stamina_item in STAMINA_ITEMS:
+                # Check for regular version
+                regular_matches = self._templates.match(frame, [stamina_item.template_name])
+                
+                if regular_matches:
+                    regular_match = regular_matches[0]
+                    regular_score = regular_match.score
+                    
+                    # If this item has a "bought" version, check if it's been purchased
+                    # by looking for the bought indicator in the SAME location
+                    if stamina_item.bought_template_name:
+                        bought_matches = self._templates.match(frame, [stamina_item.bought_template_name])
+                        
+                        if bought_matches:
+                            bought_match = bought_matches[0]
+                            bought_score = bought_match.score
+                            
+                            # Check if the bought version is at the same location (within tolerance)
+                            same_location = (
+                                abs(bought_match.top_left[0] - regular_match.top_left[0]) < 20 and
+                                abs(bought_match.top_left[1] - regular_match.top_left[1]) < 20
+                            )
+                            
+                            # If bought template matches at same location with decent score, skip it
+                            if same_location and bought_score >= 0.3:
+                                self.console.log(
+                                    f"[yellow]Skipping '{stamina_item.template_name}' at {regular_match.top_left} - "
+                                    f"already purchased (bought indicator present: score {bought_score:.3f})[/yellow]"
+                                )
+                                continue  # Try next stamina item type
+                    
+                    # This is a valid, unpurchased item
+                    self.console.log(
+                        f"Found '{stamina_item.template_name}' ({stamina_item.stamina_amount} stamina) "
+                        f"with score {regular_score:.3f} at {regular_match.top_left}->{regular_match.bottom_right}."
+                    )
+                    return regular_match, stamina_item
             
             # No stamina found
             if refresh_attempt < self.options.max_refreshes:
                 # Try to refresh
                 self.console.log(
-                    f"No '{icon_name}' found. Refreshing Black Market... (refresh #{refresh_attempt + 1})"
+                    f"No stamina items found. Refreshing Black Market... (refresh #{refresh_attempt + 1})"
                 )
                 
                 try:
@@ -225,12 +268,12 @@ class PipelineRunner:
             else:
                 # Out of refresh attempts
                 if self.options.save_debug_screenshots:
-                    self._save_debug_screenshot(frame, icon_name)
+                    self._save_debug_screenshot(frame, "stamina")
                 raise RuntimeError(
-                    f"Failed to locate '{icon_name}' after {self.options.max_refreshes} refresh attempts."
+                    f"Failed to locate any stamina items after {self.options.max_refreshes} refresh attempts."
                 )
         
-        raise RuntimeError(f"Failed to locate '{icon_name}'")
+        raise RuntimeError("Failed to locate any stamina items")
     
     def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
         if not self._templates.has_template(icon_name):
