@@ -427,7 +427,7 @@ class StaminaBuyerGUI(ctk.CTk):
                 dry_run=dry_run,
                 max_retries=3,
                 post_purchase_delay_seconds=3.0,  # Wait for emulator UI to update
-                post_click_delay_seconds=0.5,  # Wait for confirm dialog to appear
+                post_click_delay_seconds=2.0,  # Wait for confirm dialog to appear
                 max_refreshes=100,  # Try refreshing Black Market up to 100 times (can take many tries)
                 save_debug_screenshots=True,  # Enable debug screenshots for troubleshooting
             )
