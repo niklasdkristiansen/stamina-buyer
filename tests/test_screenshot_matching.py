@@ -40,7 +40,7 @@ def test_negative_matching():
     )
     
     test_files = [
-        ("not_stamina_2.png", "stamina_10", library, "non-stamina item (boots)"),
+        ("not_stamina_2.png", "stamina_10", library, "non-stamina item (boots old)"),
         ("stamina_10_bought.png", "stamina_10", library, "already purchased stamina_10"),
         ("screenshot-bm.png", "stamina_10_bought", library_low, "regular unbought stamina (shouldn't match bought)"),
     ]

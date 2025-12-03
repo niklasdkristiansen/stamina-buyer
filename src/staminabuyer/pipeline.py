@@ -45,8 +45,8 @@ class PipelineOptions:
     template_dir: Path | None = None
     confirm_icon_name: str = "to_confirm"
     gem_button_vertical_ratio: float = 0.9
-    template_threshold: float = 0.6  # Lowered from 0.7 for better detection
-    descriptor_min_matches: int = 10
+    template_threshold: float = 0.70  # Higher threshold to prevent false positives (boots, etc.)
+    descriptor_min_matches: int = 15  # Increased for better matching specificity
     template_scales: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
     save_debug_screenshots: bool = False  # Save screenshots when matching fails
 
