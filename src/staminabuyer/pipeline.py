@@ -47,7 +47,9 @@ class PipelineOptions:
     gem_button_vertical_ratio: float = 0.9
     template_threshold: float = 0.70  # Prevent false positives (boots score 0.688)
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
-    template_scales: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
+    template_scales: tuple[float, ...] = (1.0,)  # Single scale when using normalization
+    normalize_resolution: tuple[int, int] | None = (480, 870)  # Portrait normalization (matches screenshot-bm.png dimensions)
+    template_source_resolution: tuple[int, int] | None = (436, 790)  # Templates were extracted at this resolution
     save_debug_screenshots: bool = False  # Save screenshots when matching fails
 
 
@@ -84,6 +86,8 @@ class PipelineRunner:
             grayscale=True,
             descriptor_min_matches=options.descriptor_min_matches,
             console=self.console,  # Pass console for verbose logging
+            normalize_resolution=options.normalize_resolution,
+            template_source_resolution=options.template_source_resolution,
         )
 
     def run(self, targets: Sequence[EmulatorTarget]) -> list[PipelineResult]:

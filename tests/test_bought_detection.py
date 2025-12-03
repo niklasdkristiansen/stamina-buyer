@@ -43,6 +43,8 @@ def test_bought_vs_regular():
         scales=_prod_options.template_scales,
         grayscale=True,
         descriptor_min_matches=_prod_options.descriptor_min_matches,
+        normalize_resolution=_prod_options.normalize_resolution,
+        template_source_resolution=_prod_options.template_source_resolution,
     )
     
     # Match against regular template

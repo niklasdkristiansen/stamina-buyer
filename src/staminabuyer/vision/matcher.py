@@ -62,6 +62,8 @@ class TemplateLibrary:
         descriptor_ratio: float = 0.75,
         descriptor_min_matches: int = 10,
         console: Any | None = None,  # Rich Console for logging
+        normalize_resolution: tuple[int, int] | None = None,  # (width, height) to normalize screenshots to
+        template_source_resolution: tuple[int, int] | None = None,  # (width, height) of screenshot templates were extracted from
     ) -> None:
         self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
@@ -75,6 +77,8 @@ class TemplateLibrary:
             raise ValueError("descriptor_min_matches must be non-negative.")
         self.descriptor_ratio = descriptor_ratio
         self.descriptor_min_matches = descriptor_min_matches
+        self.normalize_resolution = normalize_resolution
+        self.template_source_resolution = template_source_resolution
         self._orb = cv2.ORB_create()
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self._templates: dict[str, dict[float, TemplateVariant]] = {}
@@ -93,11 +97,43 @@ class TemplateLibrary:
         template_files = list(self.template_dir.glob("*.png"))
         self._logger.info(f"Found {len(template_files)} template files")
         
+        # Calculate dynamic template scaling if both normalization and source resolution are set
+        template_scale_adjustment = 1.0
+        if self.normalize_resolution and self.template_source_resolution:
+            # Templates were extracted from template_source_resolution
+            # We're normalizing screenshots to normalize_resolution
+            # So we need to scale templates to match the normalized resolution
+            source_width, source_height = self.template_source_resolution
+            norm_width, norm_height = self.normalize_resolution
+            
+            # Calculate scale factors for width and height
+            scale_x = norm_width / source_width
+            scale_y = norm_height / source_height
+            
+            # Use the average scale (assuming templates maintain aspect ratio)
+            template_scale_adjustment = (scale_x + scale_y) / 2.0
+            
+            if self._console:
+                self._console.log(
+                    f"[cyan]Dynamic template scaling enabled: "
+                    f"{source_width}×{source_height} → {norm_width}×{norm_height} "
+                    f"(scale: {template_scale_adjustment:.3f}x)[/cyan]"
+                )
+            else:
+                self._logger.info(
+                    f"Dynamic template scaling: {template_scale_adjustment:.3f}x "
+                    f"(from {source_width}×{source_height} to {norm_width}×{norm_height})"
+                )
+        
         for path in template_files:
             image = cv2.imread(str(path), cv2.IMREAD_COLOR)
             if image is None:
                 self._logger.warning(f"Could not read template: {path}")
                 continue
+            
+            # Apply dynamic scaling to the template before preparing variants
+            if template_scale_adjustment != 1.0:
+                image = self._scale_template(image, template_scale_adjustment)
             
             prepared = self._prepare_template(image)
             variants: dict[float, TemplateVariant] = {}
@@ -123,13 +159,49 @@ class TemplateLibrary:
 
         return icon_name in self._templates
 
-    def _decode_frame(self, frame: bytes) -> tuple[np.ndarray, np.ndarray]:
+    def _decode_frame(self, frame: bytes) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+        """
+        Decode frame and optionally normalize to standard resolution.
+        
+        Returns:
+            tuple of (color_frame, prepared_frame, scale_factors)
+            - scale_factors is (x_scale, y_scale) for coordinate conversion
+        """
         array = np.frombuffer(frame, dtype=np.uint8)
         color_frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if color_frame is None:
             raise ValueError("Unable to decode framebuffer for matching.")
+        
+        scale_x = 1.0
+        scale_y = 1.0
+        
+        # Normalize resolution if configured
+        if self.normalize_resolution:
+            orig_height, orig_width = color_frame.shape[:2]
+            target_width, target_height = self.normalize_resolution
+            
+            # Only normalize if dimensions differ
+            if orig_width != target_width or orig_height != target_height:
+                # Calculate scale factors for coordinate conversion later
+                scale_x = orig_width / target_width
+                scale_y = orig_height / target_height
+                
+                # Resize frame to normalized resolution (maintaining aspect by stretching)
+                # NOTE: This assumes templates were created at the normalized resolution
+                color_frame = cv2.resize(
+                    color_frame, 
+                    (target_width, target_height), 
+                    interpolation=cv2.INTER_AREA
+                )
+                
+                if self._console:
+                    self._console.log(
+                        f"[dim]Normalized {orig_width}x{orig_height} -> "
+                        f"{target_width}x{target_height} (scale: {scale_x:.2f}x, {scale_y:.2f}x)[/dim]"
+                    )
+        
         prepared = self._prepare_frame(color_frame)
-        return color_frame, prepared
+        return color_frame, prepared, (scale_x, scale_y)
 
     def _prepare_template(self, image: np.ndarray) -> np.ndarray:
         if self.grayscale:
@@ -151,7 +223,7 @@ class TemplateLibrary:
         return cv2.resize(image, (new_width, new_height), interpolation=interpolation)
 
     def match(self, frame: bytes, icon_names: Iterable[str]) -> list[MatchResult]:
-        color_frame, decoded = self._decode_frame(frame)
+        color_frame, decoded, (scale_x, scale_y) = self._decode_frame(frame)
         # Verbose logging removed for cleaner output - best match shown at end
         matches: list[MatchResult] = []
         best_score = 0.0
@@ -188,6 +260,18 @@ class TemplateLibrary:
                                 scale,
                             )
                             continue
+                    
+                    # Convert coordinates back to original resolution if we normalized
+                    if scale_x != 1.0 or scale_y != 1.0:
+                        top_left = (
+                            int(top_left[0] * scale_x),
+                            int(top_left[1] * scale_y)
+                        )
+                        bottom_right = (
+                            int(bottom_right[0] * scale_x),
+                            int(bottom_right[1] * scale_y)
+                        )
+                    
                     matches.append(
                         MatchResult(
                             icon=icon_name,

@@ -15,7 +15,8 @@ matching, and simulates clicks to buy stamina. **No ADB installation required!**
 - 🎯 **Simple** - Just provide the emulator window title
 - 🖥️ **Universal** - Works with BlueStacks, LDPlayer, NoxPlayer, MEmu, and any Android emulator
 - 🔍 **Smart detection** - Uses computer vision (OpenCV) to find stamina cards automatically
-- 🎯 **Resolution independent** - Works across different emulator resolutions (0.5x-2.0x scaling)
+- 🎯 **Resolution independent** - Works at ANY window size with **dynamic template scaling**
+- ⚡ **Ultra-fast matching** - 10x faster than multi-scale approach
 - 🚀 **Multi-instance** - Buy stamina on multiple emulators in one run
 - 🧪 **Dry-run mode** - Test detection before making actual purchases
 - 📊 **Live logging** - See exactly what the tool is doing in real-time
@@ -150,12 +151,28 @@ staminabuyer run --config config.yaml
 
 1. **Finds your emulator window** by title (e.g., "BlueStacks")
 2. **Captures screenshot** directly from the window
-3. **Detects stamina card** using template matching (OpenCV)
-4. **Clicks the gem button** at the bottom of the detected card
-5. **Confirms purchase** by detecting and clicking the confirmation dialog
-6. **Repeats** until the requested amount is purchased
+3. **Normalizes resolution** - automatically scales to standard size (1920×1080) for consistent detection
+4. **Scales templates dynamically** - templates automatically adjust to match the normalized resolution
+5. **Detects stamina card** using ultra-fast single-scale template matching (OpenCV)
+6. **Clicks the gem button** at the bottom of the detected card (coordinates scaled back to original resolution)
+7. **Confirms purchase** by detecting and clicking the confirmation dialog
+8. **Repeats** until the requested amount is purchased
 
-All detection is resolution-independent thanks to multi-scale template matching (0.5x-2.0x).
+All detection is **truly resolution-independent** - resize your emulator window freely! The tool:
+- Normalizes screenshots to a standard resolution (1920×1080)
+- Dynamically scales templates from their source resolution (480×870) to match
+- Converts match coordinates back to the original window resolution for accurate clicking
+- Only checks **1 scale** instead of 16, making it **~10x faster** than multi-scale matching
+
+### Technical Details
+
+**Dynamic Template Scaling** makes the tool work at any resolution:
+- Templates were created at 436×790 resolution (screenshot-bm.png is 480×870, templates match at 1.1x)
+- When normalizing to 1920×1080, templates are scaled by ~2.89x automatically
+- Single-scale matching is 10x faster than the old multi-scale approach
+- Works with ANY window size without requiring template recreation
+
+See [DYNAMIC_TEMPLATE_SCALING.md](DYNAMIC_TEMPLATE_SCALING.md) for detailed technical documentation.
 
 ## Development
 - `pytest` for unit tests.

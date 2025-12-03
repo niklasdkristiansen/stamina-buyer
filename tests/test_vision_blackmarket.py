@@ -12,6 +12,8 @@ _prod_options = PipelineOptions()
 SCALES = _prod_options.template_scales
 THRESHOLD = _prod_options.template_threshold
 DESCRIPTOR_MIN_MATCHES = _prod_options.descriptor_min_matches
+NORMALIZE_RES = _prod_options.normalize_resolution
+TEMPLATE_SOURCE_RES = _prod_options.template_source_resolution
 
 
 def _gem_tap_coordinates(match, vertical_ratio: float = 0.9) -> tuple[int, int]:
@@ -32,8 +34,10 @@ def test_stamina_10_template_aligns_with_gem_button() -> None:
         scales=SCALES,
         grayscale=True,
         descriptor_min_matches=DESCRIPTOR_MIN_MATCHES,
+        normalize_resolution=NORMALIZE_RES,
+        template_source_resolution=TEMPLATE_SOURCE_RES,
     )
-    frame_bytes = (ASSETS_DIR / "blackmarket.png").read_bytes()
+    frame_bytes = (ASSETS_DIR / "screenshot-bm.png").read_bytes()
 
     matches = library.match(frame_bytes, ["stamina_10"])
     assert matches, f"Expected to find the stamina_10 card in the Black Market screenshot. Library has templates: {list(library._templates.keys())}"
@@ -59,8 +63,10 @@ def test_non_stamina_template_does_not_match_stamina_frame() -> None:
         scales=SCALES,
         grayscale=True,
         descriptor_min_matches=DESCRIPTOR_MIN_MATCHES,
+        normalize_resolution=NORMALIZE_RES,
+        template_source_resolution=TEMPLATE_SOURCE_RES,
     )
-    frame_bytes = (ASSETS_DIR / "blackmarket.png").read_bytes()
+    frame_bytes = (ASSETS_DIR / "screenshot-bm.png").read_bytes()
     matches = library.match(frame_bytes, ["not-stamina"])
     assert not matches, f"Distractor icon unexpectedly matched stamina screenshot. Found {len(matches)} matches."
 
@@ -74,6 +80,8 @@ def test_stamina_missing_when_not_present() -> None:
         scales=SCALES,
         grayscale=True,
         descriptor_min_matches=DESCRIPTOR_MIN_MATCHES,
+        normalize_resolution=NORMALIZE_RES,
+        template_source_resolution=TEMPLATE_SOURCE_RES,
     )
     frame_bytes = (ASSETS_DIR / "no-stamina-blackmarket.png").read_bytes()
     matches = library.match(frame_bytes, ["stamina_10"])

@@ -24,6 +24,8 @@ _prod_options = PipelineOptions()
 PROD_THRESHOLD = _prod_options.template_threshold
 PROD_SCALES = _prod_options.template_scales
 PROD_DESCRIPTOR_MIN = _prod_options.descriptor_min_matches
+PROD_NORMALIZE_RES = _prod_options.normalize_resolution
+PROD_TEMPLATE_SOURCE_RES = _prod_options.template_source_resolution
 
 def test_negative_matching():
     """Test that non-stamina items are NOT matched as stamina (no false positives)."""
@@ -39,6 +41,8 @@ def test_negative_matching():
         scales=PROD_SCALES,
         grayscale=True,
         descriptor_min_matches=PROD_DESCRIPTOR_MIN,
+        normalize_resolution=PROD_NORMALIZE_RES,
+        template_source_resolution=PROD_TEMPLATE_SOURCE_RES,
     )
     
     # Lower threshold library for bought template checking
@@ -47,6 +51,8 @@ def test_negative_matching():
         scales=PROD_SCALES,
         grayscale=True,
         descriptor_min_matches=PROD_DESCRIPTOR_MIN,
+        normalize_resolution=PROD_NORMALIZE_RES,
+        template_source_resolution=PROD_TEMPLATE_SOURCE_RES,
     )
     
     test_files = [
@@ -127,6 +133,8 @@ def test_screenshot_matching():
             scales=PROD_SCALES,
             grayscale=True,
             descriptor_min_matches=PROD_DESCRIPTOR_MIN,
+            normalize_resolution=PROD_NORMALIZE_RES,
+            template_source_resolution=PROD_TEMPLATE_SOURCE_RES,
         )
         
         matches = library.match(screenshot_bytes, ["stamina_10"])

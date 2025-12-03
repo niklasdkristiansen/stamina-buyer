@@ -67,6 +67,8 @@ def test_blackmarket_with_exp_item():
         scales=_prod_options.template_scales,
         grayscale=True,
         descriptor_min_matches=_prod_options.descriptor_min_matches,
+        normalize_resolution=_prod_options.normalize_resolution,
+        template_source_resolution=_prod_options.template_source_resolution,
     )
     
     print("Looking for stamina items in full Black Market screenshot...")
@@ -154,6 +156,8 @@ def test_blackmarket_with_boots():
         scales=_prod_options.template_scales,
         grayscale=True,
         descriptor_min_matches=_prod_options.descriptor_min_matches,
+        normalize_resolution=_prod_options.normalize_resolution,
+        template_source_resolution=_prod_options.template_source_resolution,
     )
     
     print("Checking if boots are incorrectly matched as stamina...")

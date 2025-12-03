@@ -45,6 +45,8 @@ def test_black_market_workflow():
         scales=_prod_options.template_scales,
         grayscale=True,
         descriptor_min_matches=_prod_options.descriptor_min_matches,
+        normalize_resolution=_prod_options.normalize_resolution,
+        template_source_resolution=_prod_options.template_source_resolution,
     )
     
     print("STEP 1: Find available stamina item")
@@ -170,6 +172,8 @@ def test_workflow_with_bought_items():
         scales=_prod_options.template_scales,
         grayscale=True,
         descriptor_min_matches=_prod_options.descriptor_min_matches,
+        normalize_resolution=_prod_options.normalize_resolution,
+        template_source_resolution=_prod_options.template_source_resolution,
     )
     
     bought_items = [
