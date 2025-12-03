@@ -28,7 +28,7 @@ class PipelineOptions:
     confirm_icon_name: str = "to_confirm"
     pack_size: int = 10
     gem_button_vertical_ratio: float = 0.9
-    template_threshold: float = 0.7
+    template_threshold: float = 0.6  # Lowered from 0.7 for better detection
     descriptor_min_matches: int = 10
     template_scales: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
     save_debug_screenshots: bool = False  # Save screenshots when matching fails
@@ -66,6 +66,7 @@ class PipelineRunner:
             scales=options.template_scales,
             grayscale=True,
             descriptor_min_matches=options.descriptor_min_matches,
+            console=self.console,  # Pass console for verbose logging
         )
 
     def run(self, targets: Sequence[EmulatorTarget]) -> list[PipelineResult]:

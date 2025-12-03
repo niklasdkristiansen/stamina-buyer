@@ -7,6 +7,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -60,6 +61,7 @@ class TemplateLibrary:
         grayscale: bool = True,
         descriptor_ratio: float = 0.75,
         descriptor_min_matches: int = 10,
+        console: Any | None = None,  # Rich Console for logging
     ) -> None:
         self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
@@ -77,6 +79,7 @@ class TemplateLibrary:
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self._templates: dict[str, dict[float, TemplateVariant]] = {}
         self._logger = logging.getLogger(__name__)
+        self._console = console  # Rich console for verbose output
         self.reload()
 
     def reload(self) -> None:
@@ -149,7 +152,8 @@ class TemplateLibrary:
 
     def match(self, frame: bytes, icon_names: Iterable[str]) -> list[MatchResult]:
         color_frame, decoded = self._decode_frame(frame)
-        self._logger.info(f"Matching in frame of size {decoded.shape} against templates: {list(icon_names)}")
+        if self._console:
+            self._console.log(f"[dim]Matching in frame of size {decoded.shape} against templates: {list(icon_names)}[/dim]")
         matches: list[MatchResult] = []
         best_score = 0.0
         best_icon = None
@@ -157,16 +161,19 @@ class TemplateLibrary:
         for icon_name in icon_names:
             variants = self._templates.get(icon_name)
             if not variants:
-                self._logger.warning(f"Template '{icon_name}' missing from library.")
+                if self._console:
+                    self._console.log(f"[yellow]Template '{icon_name}' missing from library.[/yellow]")
                 continue
-            self._logger.info(f"Trying template '{icon_name}' with {len(variants)} scale variants (threshold={self.threshold})")
+            if self._console:
+                self._console.log(f"[dim]Trying template '{icon_name}' with {len(variants)} scale variants (threshold={self.threshold})[/dim]")
             for scale, variant in variants.items():
                 template = variant.match_image
                 if decoded.shape[0] < template.shape[0] or decoded.shape[1] < template.shape[1]:
                     continue
                 res = cv2.matchTemplate(decoded, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                self._logger.debug(f"  Scale {scale:.2f}x: score={max_val:.4f} (threshold={self.threshold})")
+                if self._console:
+                    self._console.log(f"[dim]  Scale {scale:.2f}x: score={max_val:.4f}[/dim]")
                 if max_val > best_score:
                     best_score = max_val
                     best_icon = icon_name
@@ -212,13 +219,11 @@ class TemplateLibrary:
                         self.threshold,
                     )
         if not matches and best_icon:
-            self._logger.info(
-                "Best match was '%s' (scale %.2f) at score %.3f but below threshold %.3f.",
-                best_icon,
-                best_scale,
-                best_score,
-                self.threshold,
-            )
+            msg = f"Best match was '{best_icon}' (scale {best_scale:.2f}x) at score {best_score:.4f} but below threshold {self.threshold:.2f}"
+            if self._console:
+                self._console.log(f"[yellow]{msg}[/yellow]")
+            else:
+                self._logger.info(msg)
         return matches
 
     def _passes_descriptor_check(
