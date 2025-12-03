@@ -14,7 +14,11 @@ import sys
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from staminabuyer.pipeline import PipelineOptions
 from staminabuyer.vision.matcher import TemplateLibrary
+
+# Use production settings
+_prod_options = PipelineOptions()
 
 def test_priority_order():
     """Test that items are checked in correct priority order."""
@@ -34,9 +38,10 @@ def test_priority_order():
     screenshot_bytes = screenshot_path.read_bytes()
     
     library = TemplateLibrary(
-        threshold=0.6,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=_prod_options.template_threshold,
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     print("Testing which stamina types are detected in screenshot-bm.png:")
@@ -82,9 +87,10 @@ def test_bought_skipping():
     print()
     
     library = TemplateLibrary(
-        threshold=0.3,  # Low threshold
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=0.3,  # Low threshold specifically for bought detection
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     tests = [

@@ -17,7 +17,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from staminabuyer.vision.matcher import TemplateLibrary
-from staminabuyer.pipeline import STAMINA_ITEMS
+from staminabuyer.pipeline import STAMINA_ITEMS, PipelineOptions
+
+# Use production settings
+_prod_options = PipelineOptions()
 
 def test_black_market_workflow():
     """Test complete Black Market purchase workflow."""
@@ -38,9 +41,10 @@ def test_black_market_workflow():
     screenshot_bytes = bm_screenshot.read_bytes()
     
     library = TemplateLibrary(
-        threshold=0.6,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=_prod_options.template_threshold,
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     print("STEP 1: Find available stamina item")
@@ -162,9 +166,10 @@ def test_workflow_with_bought_items():
     print()
     
     library = TemplateLibrary(
-        threshold=0.3,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=0.3,  # Low threshold specifically for bought detection
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     bought_items = [

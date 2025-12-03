@@ -1,14 +1,17 @@
 from pathlib import Path
 
+from staminabuyer.pipeline import PipelineOptions
 from staminabuyer.vision.matcher import TemplateLibrary
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_DIR = PROJECT_ROOT / "assets" / "icons"
-# Wide scale range to handle different emulator resolutions (0.5x to 2.0x)
-SCALES = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
-THRESHOLD = 0.7  # Must score at least 70% to be considered a match
-DESCRIPTOR_MIN_MATCHES = 10  # Require at least 10 feature matches for verification
+
+# IMPORTANT: Use the exact same parameters as production to ensure tests are valid
+_prod_options = PipelineOptions()
+SCALES = _prod_options.template_scales
+THRESHOLD = _prod_options.template_threshold
+DESCRIPTOR_MIN_MATCHES = _prod_options.descriptor_min_matches
 
 
 def _gem_tap_coordinates(match, vertical_ratio: float = 0.9) -> tuple[int, int]:

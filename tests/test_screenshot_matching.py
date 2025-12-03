@@ -16,7 +16,14 @@ import sys
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from staminabuyer.pipeline import PipelineOptions
 from staminabuyer.vision.matcher import TemplateLibrary
+
+# IMPORTANT: Use the exact same parameters as production
+_prod_options = PipelineOptions()
+PROD_THRESHOLD = _prod_options.template_threshold
+PROD_SCALES = _prod_options.template_scales
+PROD_DESCRIPTOR_MIN = _prod_options.descriptor_min_matches
 
 def test_negative_matching():
     """Test that non-stamina items are NOT matched as stamina (no false positives)."""
@@ -24,19 +31,22 @@ def test_negative_matching():
     print("=" * 80)
     print("NEGATIVE TESTS: Ensuring false positives don't occur")
     print("=" * 80)
+    print(f"Using PRODUCTION settings: threshold={PROD_THRESHOLD}, descriptor_min={PROD_DESCRIPTOR_MIN}")
     print()
     
     library = TemplateLibrary(
-        threshold=0.6,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=PROD_THRESHOLD,
+        scales=PROD_SCALES,
         grayscale=True,
+        descriptor_min_matches=PROD_DESCRIPTOR_MIN,
     )
     
     # Lower threshold library for bought template checking
     library_low = TemplateLibrary(
         threshold=0.3,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        scales=PROD_SCALES,
         grayscale=True,
+        descriptor_min_matches=PROD_DESCRIPTOR_MIN,
     )
     
     test_files = [
@@ -95,15 +105,16 @@ def test_screenshot_matching():
     print("Testing template matching...")
     print(f"Screenshot: {screenshot_path}")
     print(f"Screenshot size: {len(screenshot_bytes)} bytes")
+    print(f"PRODUCTION threshold: {PROD_THRESHOLD}")
     print()
     
-    # Test with different thresholds for both stamina types
+    # Test with production threshold and variations
     test_configs = [
-        ("Original (0.7)", 0.7),
-        ("Current (0.6)", 0.6),
-        ("Lower (0.5)", 0.5),
-        ("Even lower (0.4)", 0.4),
-        ("Very low (0.3)", 0.3),
+        (f"PRODUCTION ({PROD_THRESHOLD})", PROD_THRESHOLD),
+        ("Higher (0.7)", 0.7),
+        ("Lower (0.6)", 0.6),
+        ("Even lower (0.5)", 0.5),
+        ("Very low (0.4)", 0.4),
     ]
     
     results_summary = []
@@ -113,8 +124,9 @@ def test_screenshot_matching():
         
         library = TemplateLibrary(
             threshold=threshold,
-            scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+            scales=PROD_SCALES,
             grayscale=True,
+            descriptor_min_matches=PROD_DESCRIPTOR_MIN,
         )
         
         matches = library.match(screenshot_bytes, ["stamina_10"])
@@ -145,17 +157,15 @@ def test_screenshot_matching():
         print(f"   {threshold:.1f}    | {status} | {score:7.4f}    | {scale:.2f}x")
     print()
     
-    # Check if lowering threshold helped
-    if len(results_summary) >= 2:
-        original_worked = results_summary[0][1]  # 0.7 threshold
-        current_worked = results_summary[1][1]   # 0.6 threshold
+    # Check if production threshold works
+    if len(results_summary) >= 1:
+        prod_worked = results_summary[0][1]  # Production threshold
         
-        if not original_worked and current_worked:
-            print("🎉 SUCCESS! Lowering threshold from 0.7 to 0.6 FIXED the issue!")
-        elif original_worked:
-            print("✅ Template matching works even at 0.7 threshold")
+        if prod_worked:
+            print(f"✅ PRODUCTION settings work! Threshold {PROD_THRESHOLD} successfully finds stamina")
         else:
-            print("⚠️  Need to lower threshold further or adjust template")
+            print(f"❌ PRODUCTION settings FAIL! Threshold {PROD_THRESHOLD} cannot find stamina")
+            print("   This means the pipeline will NOT work in production!")
     print()
     
     return True

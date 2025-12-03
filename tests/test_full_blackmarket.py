@@ -17,7 +17,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from staminabuyer.vision.matcher import TemplateLibrary
-from staminabuyer.pipeline import STAMINA_ITEMS
+from staminabuyer.pipeline import STAMINA_ITEMS, PipelineOptions
+
+# Use production settings
+_prod_options = PipelineOptions()
 
 def test_blackmarket_with_exp_item():
     """
@@ -60,9 +63,10 @@ def test_blackmarket_with_exp_item():
     screenshot_bytes = screenshot_path.read_bytes()
     
     library = TemplateLibrary(
-        threshold=0.70,  # Current production threshold
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=_prod_options.template_threshold,
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     print("Looking for stamina items in full Black Market screenshot...")
@@ -146,9 +150,10 @@ def test_blackmarket_with_boots():
     screenshot_bytes = screenshot_path.read_bytes()
     
     library = TemplateLibrary(
-        threshold=0.70,
-        scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+        threshold=_prod_options.template_threshold,
+        scales=_prod_options.template_scales,
         grayscale=True,
+        descriptor_min_matches=_prod_options.descriptor_min_matches,
     )
     
     print("Checking if boots are incorrectly matched as stamina...")
