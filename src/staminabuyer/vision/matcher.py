@@ -152,8 +152,7 @@ class TemplateLibrary:
 
     def match(self, frame: bytes, icon_names: Iterable[str]) -> list[MatchResult]:
         color_frame, decoded = self._decode_frame(frame)
-        if self._console:
-            self._console.log(f"[dim]Matching in frame of size {decoded.shape} against templates: {list(icon_names)}[/dim]")
+        # Verbose logging removed for cleaner output - best match shown at end
         matches: list[MatchResult] = []
         best_score = 0.0
         best_icon = None
@@ -164,16 +163,12 @@ class TemplateLibrary:
                 if self._console:
                     self._console.log(f"[yellow]Template '{icon_name}' missing from library.[/yellow]")
                 continue
-            if self._console:
-                self._console.log(f"[dim]Trying template '{icon_name}' with {len(variants)} scale variants (threshold={self.threshold})[/dim]")
             for scale, variant in variants.items():
                 template = variant.match_image
                 if decoded.shape[0] < template.shape[0] or decoded.shape[1] < template.shape[1]:
                     continue
                 res = cv2.matchTemplate(decoded, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if self._console:
-                    self._console.log(f"[dim]  Scale {scale:.2f}x: score={max_val:.4f}[/dim]")
                 if max_val > best_score:
                     best_score = max_val
                     best_icon = icon_name

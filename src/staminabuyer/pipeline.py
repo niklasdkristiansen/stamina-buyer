@@ -23,10 +23,14 @@ class PipelineOptions:
     max_retries: int = 3
     purchase_delay_seconds: float = 1.0
     jitter_seconds: float = 0.2
+    post_purchase_delay_seconds: float = 3.0  # Wait after successful purchase for UI to update
+    post_click_delay_seconds: float = 0.5  # Wait after clicking item for confirm dialog to appear
+    refresh_button_icon: str = "refresh"
+    max_refreshes: int = 100  # Maximum times to refresh the Black Market (can take 50-100+ tries)
     template_dir: Path | None = None
     stamina_pack_icon: str = "stamina_10"
     confirm_icon_name: str = "to_confirm"
-    pack_size: int = 10
+    pack_size: int = 500  # stamina_10 = 10 packs × 50 stamina = 500 total
     gem_button_vertical_ratio: float = 0.9
     template_threshold: float = 0.6  # Lowered from 0.7 for better detection
     descriptor_min_matches: int = 10
@@ -110,19 +114,42 @@ class PipelineRunner:
 
         packs_needed = ceil(target.stamina / pack_size)
         purchased = 0
+        
+        # Warn if we'll buy more than requested
+        if packs_needed * pack_size > target.stamina:
+            actual_amount = packs_needed * pack_size
+            self.console.log(
+                f"[yellow]Note: Will buy {actual_amount} stamina ({packs_needed} items × {pack_size}) "
+                f"to meet request of {target.stamina}[/yellow]"
+            )
 
         for attempt in range(1, packs_needed + 1):
             self.console.log(
-                f"Buying pack {attempt}/{packs_needed} for '{target.name}' (size={pack_size})."
+                f"Buying item {attempt}/{packs_needed} for '{target.name}' ({pack_size} stamina per item)."
             )
-            pack_match = self._match_with_retry(client, self.options.stamina_pack_icon)
+            
+            # Try to find stamina, refresh if needed
+            pack_match = self._find_stamina_with_refresh(client)
+            
+            # Click the stamina item
             self._tap_gem_button(client, pack_match)
+            
+            # Wait for confirm dialog to appear
+            delay = self.options.post_click_delay_seconds
+            self.console.log(f"[dim]Waiting {delay}s for confirm dialog...[/dim]")
+            time.sleep(delay)
 
+            # Find and click confirm button
             confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
             self._tap_center(client, confirm_match)
 
             purchased += pack_size
-            self._sleep_with_jitter()
+            
+            # Wait for purchase to complete and UI to update
+            if attempt < packs_needed:  # Don't wait after the last purchase
+                delay = self.options.post_purchase_delay_seconds
+                self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
+                time.sleep(delay)
 
         return purchased
 
@@ -153,6 +180,58 @@ class PipelineRunner:
         if delay > 0:
             time.sleep(delay)
 
+    def _find_stamina_with_refresh(self, client: ScreenCaptureClient) -> MatchResult:
+        """
+        Try to find stamina item. If not found, refresh the Black Market and retry.
+        
+        Returns:
+            MatchResult for the stamina item
+            
+        Raises:
+            RuntimeError: If stamina cannot be found after refreshing
+        """
+        icon_name = self.options.stamina_pack_icon
+        
+        for refresh_attempt in range(self.options.max_refreshes + 1):
+            # Try to find stamina (first attempt or after refresh)
+            frame = client.screencap()
+            matches = self._templates.match(frame, [icon_name])
+            
+            if matches:
+                match = matches[0]
+                self.console.log(
+                    f"Found '{icon_name}' with score {match.score:.3f} "
+                    f"at {match.top_left}->{match.bottom_right}."
+                )
+                return match
+            
+            # No stamina found
+            if refresh_attempt < self.options.max_refreshes:
+                # Try to refresh
+                self.console.log(
+                    f"No '{icon_name}' found. Refreshing Black Market... (refresh #{refresh_attempt + 1})"
+                )
+                
+                try:
+                    refresh_match = self._match_with_retry(client, self.options.refresh_button_icon)
+                    self._tap_center(client, refresh_match)
+                    
+                    # Wait for refresh to complete
+                    refresh_delay = 2.0
+                    self.console.log(f"[dim]Waiting {refresh_delay}s for refresh to complete...[/dim]")
+                    time.sleep(refresh_delay)
+                except RuntimeError:
+                    self.console.log("[yellow]Refresh button not found, continuing...[/yellow]")
+            else:
+                # Out of refresh attempts
+                if self.options.save_debug_screenshots:
+                    self._save_debug_screenshot(frame, icon_name)
+                raise RuntimeError(
+                    f"Failed to locate '{icon_name}' after {self.options.max_refreshes} refresh attempts."
+                )
+        
+        raise RuntimeError(f"Failed to locate '{icon_name}'")
+    
     def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
         if not self._templates.has_template(icon_name):
             raise RuntimeError(f"Template '{icon_name}' is not available in assets/icons.")
