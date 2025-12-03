@@ -426,6 +426,7 @@ class StaminaBuyerGUI(ctk.CTk):
             options = PipelineOptions(
                 dry_run=dry_run,
                 max_retries=3,
+                save_debug_screenshots=True,  # Enable debug screenshots for troubleshooting
             )
             
             # Redirect logs to GUI

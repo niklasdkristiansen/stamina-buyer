@@ -81,6 +81,42 @@ class ScreenCaptureClient:
         self._window_info: WindowInfo | None = None
         self._mss = mss.mss()
     
+    def focus_window(self) -> None:
+        """
+        Bring the window to the front and focus it.
+        
+        This ensures the window is visible and active before capturing/clicking.
+        """
+        if self._window_info is None:
+            self._window_info = self.find_window()
+        
+        if HAS_WIN32 and self._window_info.handle:
+            # Windows: Use win32gui to bring window to foreground
+            try:
+                import win32con
+                if win32gui.IsIconic(self._window_info.handle):
+                    # If minimized, restore it
+                    win32gui.ShowWindow(self._window_info.handle, win32con.SW_RESTORE)
+                # Bring to foreground
+                win32gui.SetForegroundWindow(self._window_info.handle)
+                time.sleep(0.3)  # Give window time to come to front
+            except Exception:
+                # If this fails, not critical - continue anyway
+                pass
+        elif HAS_QUARTZ and self._window_info.handle:
+            # macOS: Use AppleScript to activate the application
+            try:
+                import subprocess
+                # Get the owner name from the window info (it's stored in title if it's just the app name)
+                # or we need to query it again
+                app_name = self._window_info.title.split('(')[-1].rstrip(')') if '(' in self._window_info.title else self._window_info.title
+                script = f'tell application "{app_name}" to activate'
+                subprocess.run(['osascript', '-e', script], check=False, capture_output=True)
+                time.sleep(0.3)  # Give window time to come to front
+            except Exception:
+                # If this fails, not critical - continue anyway
+                pass
+    
     def find_window(self) -> WindowInfo:
         """
         Find the emulator window by title.

@@ -31,6 +31,7 @@ class PipelineOptions:
     template_threshold: float = 0.7
     descriptor_min_matches: int = 10
     template_scales: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
+    save_debug_screenshots: bool = False  # Save screenshots when matching fails
 
 
 @dataclass(slots=True)
@@ -97,6 +98,9 @@ class PipelineRunner:
         return PipelineResult(name=target.name, requested=target.stamina, purchased=purchased, errors=errors)
 
     def _execute_purchase_loop(self, client: ScreenCaptureClient, target: EmulatorTarget) -> int:
+        # Focus the window first to ensure it's visible and on top
+        self.console.log("Bringing window to foreground...")
+        client.focus_window()
         """Buy stamina packs by matching templates and tapping confirm dialogs."""
 
         pack_size = self.options.pack_size
@@ -167,6 +171,11 @@ class PipelineRunner:
                 f"Attempt {attempt}/{self.options.max_retries}: "
                 f"no match for '{icon_name}', retrying after delay."
             )
+            
+            # Save debug screenshot if enabled and this is the last attempt
+            if self.options.save_debug_screenshots and attempt == self.options.max_retries:
+                self._save_debug_screenshot(frame, icon_name)
+            
             self._sleep_with_jitter()
 
         raise RuntimeError(f"Failed to locate '{icon_name}' after {self.options.max_retries} retries.")
@@ -187,3 +196,28 @@ class PipelineRunner:
         tap_y = min(match.bottom_right[1] - 1, max(match.top_left[1], tap_y))
         self.console.log(f"Tapping coordinates ({tap_x}, {tap_y}).")
         client.tap(tap_x, tap_y)
+    
+    def _save_debug_screenshot(self, frame: bytes, icon_name: str) -> None:
+        """Save a debug screenshot when template matching fails."""
+        try:
+            import cv2
+            import numpy as np
+            from datetime import datetime
+            
+            # Decode the frame
+            array = np.frombuffer(frame, dtype=np.uint8)
+            image = cv2.imdecode(array, cv2.IMREAD_COLOR)
+            
+            if image is not None:
+                # Create debug directory if it doesn't exist
+                debug_dir = Path.cwd() / "debug_screenshots"
+                debug_dir.mkdir(exist_ok=True)
+                
+                # Save with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = debug_dir / f"failed_{icon_name}_{timestamp}.png"
+                cv2.imwrite(str(filename), image)
+                
+                self.console.log(f"[dim]Debug screenshot saved: {filename}[/dim]")
+        except Exception as e:
+            self.console.log(f"[dim]Could not save debug screenshot: {e}[/dim]")
