@@ -31,7 +31,8 @@ from .pipeline import PipelineOptions, PipelineRunner
 
 
 # Default reference width for template matching (matches template extraction resolution)
-DEFAULT_REFERENCE_WIDTH = 322
+# Templates were extracted from ~341-344px wide screenshots
+DEFAULT_REFERENCE_WIDTH = 343
 
 
 class LogCapture:

@@ -126,10 +126,10 @@ def run(
     ),
     max_retries: int = typer.Option(3, min=1, help="Maximum retries when detection fails."),
     reference_width: int | None = typer.Option(
-        322,
+        343,
         "--reference-width",
         "-w",
-        help="Normalize screenshots to this width for reliable matching (default: 322, use 0 to disable).",
+        help="Normalize screenshots to this width for reliable matching (default: 343, use 0 to disable).",
     ),
 ) -> None:
     """Buy stamina from Black Market by detecting the window and clicking automatically.

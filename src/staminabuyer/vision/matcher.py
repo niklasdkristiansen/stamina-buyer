@@ -155,7 +155,8 @@ class TemplateLibrary:
                     match_image=match_image, color_image=color_image, descriptors=descriptors
                 )
             self._templates[path.stem] = variants
-            self._logger.debug(f"Loaded template '{path.stem}' with {len(variants)} scale variants")
+            h, w = image.shape[:2]
+            self._logger.debug(f"Loaded template '{path.stem}' ({w}×{h}) with {len(variants)} scale variants")
         
         self._logger.info(f"Successfully loaded {len(self._templates)} templates: {list(self._templates.keys())}")
 
@@ -181,7 +182,7 @@ class TemplateLibrary:
         
         # Always log the screenshot resolution for debugging
         if self._console:
-            self._console.log(f"[dim]Screenshot resolution: {orig_width}×{orig_height}[/dim]")
+            self._console.log(f"[cyan]Screenshot: {orig_width}×{orig_height}[/cyan]")
         
         scale_x = 1.0
         scale_y = 1.0
@@ -330,11 +331,14 @@ class TemplateLibrary:
                         self.threshold,
                     )
         if not matches and best_icon:
-            msg = f"Best match was '{best_icon}' (scale {best_scale:.2f}x) at score {best_score:.4f} but below threshold {self.threshold:.2f}"
+            msg = f"❌ No match: best was '{best_icon}' @ scale {best_scale:.2f}x, score {best_score:.3f} (threshold: {self.threshold:.2f})"
             if self._console:
                 self._console.log(f"[yellow]{msg}[/yellow]")
             else:
                 self._logger.info(msg)
+        elif not matches:
+            if self._console:
+                self._console.log(f"[yellow]❌ No templates matched at all[/yellow]")
         return matches
 
     def _passes_descriptor_check(
