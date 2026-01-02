@@ -44,7 +44,7 @@ class PipelineOptions:
     template_dir: Path | None = None
     confirm_icon_name: str = "to_confirm"
     gem_button_vertical_ratio: float = 0.9
-    template_threshold: float = 0.75  # Safe margin above 0.64 false positive; 0.02 scale steps ensure reliable matching
+    template_threshold: float = 0.70  # Lowered to catch refresh button variants (free vs paid)
     bought_threshold: float = 0.5  # Lower threshold for detecting "already bought" items
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
     # Templates are scale-sensitive; 0.02 step increments ensure we hit the exact scale needed
