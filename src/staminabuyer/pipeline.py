@@ -67,6 +67,11 @@ class PipelineResult:
         return self.purchased >= self.requested and not self.errors
 
 
+class CancelledError(Exception):
+    """Raised when the operation is cancelled by user."""
+    pass
+
+
 class PipelineRunner:
     """Runs the purchase pipeline sequentially for each emulator."""
 
@@ -77,11 +82,13 @@ class PipelineRunner:
         client_factory: Callable[[str], ScreenCaptureClient] | None = None,
         template_library: TemplateLibrary | None = None,
         progress_callback: Callable[[str, int], None] | None = None,  # (target_name, purchased_amount)
+        cancel_callback: Callable[[], bool] | None = None,  # Returns True if cancelled
     ) -> None:
         self.options = options
         self.console = console or Console()
         self._client_factory = client_factory or (lambda window_title: ScreenCaptureClient(window_title=window_title))
         self._progress_callback = progress_callback
+        self._cancel_callback = cancel_callback
         threshold = options.template_threshold
         self._templates = template_library or TemplateLibrary(
             options.template_dir,
@@ -95,9 +102,16 @@ class PipelineRunner:
             reference_width=options.reference_width,
         )
 
+    def _check_cancelled(self) -> None:
+        """Check if operation was cancelled and raise if so."""
+        if self._cancel_callback and self._cancel_callback():
+            self.console.log("[yellow]Operation cancelled by user[/yellow]")
+            raise CancelledError("Operation cancelled by user")
+
     def run(self, targets: Sequence[EmulatorTarget]) -> list[PipelineResult]:
         results: list[PipelineResult] = []
         for target in targets:
+            self._check_cancelled()
             result = self._process_target(target)
             results.append(result)
 
@@ -135,6 +149,8 @@ class PipelineRunner:
         
         # Keep buying until we reach the target
         while purchased < target.stamina:
+            self._check_cancelled()
+            
             purchase_count += 1
             remaining = target.stamina - purchased
             
@@ -154,9 +170,18 @@ class PipelineRunner:
             self.console.log(f"[dim]Waiting {delay}s for confirm dialog...[/dim]")
             time.sleep(delay)
 
-            # Find and click confirm button
-            confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
-            self._tap_center(client, confirm_match)
+            # Find and click confirm button - if not found, skip and try again
+            try:
+                confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
+                self._tap_center(client, confirm_match)
+            except RuntimeError:
+                self.console.log(
+                    "[yellow]⚠️ Confirm dialog not found - item may already be purchased. "
+                    "Continuing...[/yellow]"
+                )
+                # Wait a moment then continue to find next item
+                time.sleep(self.options.post_purchase_delay_seconds)
+                continue
 
             # Update purchased amount
             purchased += stamina_item.stamina_amount
@@ -220,6 +245,8 @@ class PipelineRunner:
             RuntimeError: If stamina cannot be found after refreshing
         """
         for refresh_attempt in range(self.options.max_refreshes + 1):
+            self._check_cancelled()
+            
             # Try to find any stamina item (try in priority order)
             frame = client.screencap()
             
@@ -246,23 +273,23 @@ class PipelineRunner:
                                 abs(bought_match.top_left[1] - regular_match.top_left[1]) < 20
                             )
                             
-                            # Only consider "bought" if the bought template scores HIGHER than regular
-                            # This prevents false positives where both templates match similar scores
+                            # If bought template matches above threshold at same location, it's bought
+                            # The bought template specifically includes the "purchased" overlay,
+                            # so a high match means that overlay is present
                             is_actually_bought = (
                                 same_location and 
-                                bought_score >= 0.5 and  # Reasonable minimum
-                                bought_score > regular_score  # Bought must score higher than regular
+                                bought_score >= self.options.template_threshold
                             )
                             
                             if is_actually_bought:
                                 self.console.log(
                                     f"[yellow]Skipping '{stamina_item.template_name}' at {regular_match.top_left} - "
-                                    f"already purchased (bought: {bought_score:.3f} > regular: {regular_score:.3f})[/yellow]"
+                                    f"already purchased (bought score: {bought_score:.3f} >= {self.options.template_threshold})[/yellow]"
                                 )
                                 continue  # Try next stamina item type
                             else:
                                 self.console.log(
-                                    f"[dim]Bought check: regular={regular_score:.3f}, bought={bought_score:.3f} → not bought[/dim]"
+                                    f"[dim]Bought check: bought={bought_score:.3f} < threshold={self.options.template_threshold:.3f} → not bought[/dim]"
                                 )
                     
                     # This is a valid, unpurchased item

@@ -510,7 +510,7 @@ class StaminaBuyerGUI(ctk.CTk):
     def _execute_pipeline(self):
         """Execute the pipeline (runs in background thread)."""
         try:
-            from .pipeline import PipelineResult
+            from .pipeline import PipelineResult, CancelledError
             
             # Redirect logs to GUI
             console = Console(file=LogCapture(self.log_queue), force_terminal=False)
@@ -541,11 +541,20 @@ class StaminaBuyerGUI(ctk.CTk):
                 )
                 
                 # Progress callback to update UI in real-time
-                current_idx = i  # Capture index for closure
-                def on_progress(target_name: str, purchased: int):
-                    self.log_queue.put(("target_progress", (current_idx, purchased)))
+                # Use default argument to capture current value of i (not reference)
+                def on_progress(target_name: str, purchased: int, idx=i):
+                    self.log_queue.put(("target_progress", (idx, purchased)))
                 
-                runner = PipelineRunner(options=options, console=console, progress_callback=on_progress)
+                # Cancel check callback
+                def should_cancel():
+                    return self.cancel_requested
+                
+                runner = PipelineRunner(
+                    options=options,
+                    console=console,
+                    progress_callback=on_progress,
+                    cancel_callback=should_cancel,
+                )
                 
                 try:
                     result = runner.run([emulator_target])[0]
@@ -554,6 +563,13 @@ class StaminaBuyerGUI(ctk.CTk):
                     # Final update
                     self.log_queue.put(("target_progress", (i, result.purchased)))
                     self.log_queue.put(("target_complete", (i, result.successful)))
+                
+                except CancelledError:
+                    self.log_queue.put(("target_cancelled", i))
+                    # Mark remaining as cancelled too
+                    for j in range(i + 1, len(self.targets)):
+                        self.log_queue.put(("target_cancelled", j))
+                    break
                     
                 except Exception as e:
                     self._log(f"❌ Error on {target['name']}: {e}")

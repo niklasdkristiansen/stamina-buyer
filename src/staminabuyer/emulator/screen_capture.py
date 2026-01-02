@@ -16,7 +16,8 @@ try:
     import pyautogui
     
     HAS_SCREEN_CAPTURE = True
-except ImportError:
+except (ImportError, KeyError):
+    # KeyError happens on Linux when DISPLAY env var is not set
     HAS_SCREEN_CAPTURE = False
 
 try:
