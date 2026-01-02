@@ -47,9 +47,8 @@ class PipelineOptions:
     template_threshold: float = 0.70  # Lowered to catch refresh button variants (free vs paid)
     bought_threshold: float = 0.5  # Lower threshold for detecting "already bought" items
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
-    # Templates are scale-sensitive; 0.02 step increments ensure we hit the exact scale needed
-    # Range 0.4-2.0 covers emulator windows from ~200px to ~2000px width
-    template_scales: tuple[float, ...] = tuple(round(0.4 + i * 0.02, 2) for i in range(81))  # 0.40 to 2.00 in 0.02 steps
+    # With reference_width normalization, we only need scales near 1.0
+    template_scales: tuple[float, ...] = (0.90, 0.95, 1.00, 1.05, 1.10)
     normalize_resolution: tuple[int, int] | None = None  # Let multi-scale handle resolution differences
     template_source_resolution: tuple[int, int] | None = None  # Not using dynamic scaling
     reference_width: int | None = None  # Normalize screenshots to this width (maintains aspect ratio, more robust)
