@@ -77,10 +77,12 @@ class PipelineRunner:
         console: Console | None = None,
         client_factory: Callable[[str], ScreenCaptureClient] | None = None,
         template_library: TemplateLibrary | None = None,
+        progress_callback: Callable[[str, int], None] | None = None,  # (target_name, purchased_amount)
     ) -> None:
         self.options = options
         self.console = console or Console()
         self._client_factory = client_factory or (lambda window_title: ScreenCaptureClient(window_title=window_title))
+        self._progress_callback = progress_callback
         threshold = options.template_threshold
         self._templates = template_library or TemplateLibrary(
             options.template_dir,
@@ -163,6 +165,10 @@ class PipelineRunner:
                 f"✅ Purchased {stamina_item.stamina_amount} stamina. "
                 f"Total: {purchased}/{target.stamina}"
             )
+            
+            # Notify progress callback
+            if self._progress_callback:
+                self._progress_callback(target.name, purchased)
             
             # Check if we're done
             if purchased >= target.stamina:

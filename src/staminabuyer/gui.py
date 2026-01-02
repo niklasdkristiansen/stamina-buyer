@@ -542,13 +542,18 @@ class StaminaBuyerGUI(ctk.CTk):
                     reference_width=DEFAULT_REFERENCE_WIDTH,
                 )
                 
-                runner = PipelineRunner(options=options, console=console)
+                # Progress callback to update UI in real-time
+                current_idx = i  # Capture index for closure
+                def on_progress(target_name: str, purchased: int):
+                    self.log_queue.put(("target_progress", (current_idx, purchased)))
+                
+                runner = PipelineRunner(options=options, console=console, progress_callback=on_progress)
                 
                 try:
                     result = runner.run([emulator_target])[0]
                     results.append(result)
                     
-                    # Update progress
+                    # Final update
                     self.log_queue.put(("target_progress", (i, result.purchased)))
                     self.log_queue.put(("target_complete", (i, result.successful)))
                     
