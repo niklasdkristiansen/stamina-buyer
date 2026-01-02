@@ -18,14 +18,27 @@ app = typer.Typer(
 console = Console()
 
 
-def _build_runner(config: ResolvedConfiguration, dry_run: bool, max_retries: int) -> PipelineRunner:
+def _build_runner(
+    config: ResolvedConfiguration,
+    dry_run: bool,
+    max_retries: int,
+    reference_width: int | None = None,
+) -> PipelineRunner:
+    # Convert 0 to None (disabled)
+    ref_width = reference_width if reference_width and reference_width > 0 else None
+    
     options = PipelineOptions(
         dry_run=dry_run,
         max_retries=max_retries,
         purchase_delay_seconds=config.purchase_delay_seconds,
         jitter_seconds=config.jitter_seconds,
+        reference_width=ref_width,
     )
-    return PipelineRunner(options=options)
+    
+    if ref_width:
+        console.print(f"[cyan]Using reference width: {ref_width}px (screenshots will be normalized)[/cyan]")
+    
+    return PipelineRunner(options=options, console=console)
 
 
 @app.callback()
@@ -112,6 +125,12 @@ def run(
         False, help="Test detection without clicking (recommended first run)."
     ),
     max_retries: int = typer.Option(3, min=1, help="Maximum retries when detection fails."),
+    reference_width: int | None = typer.Option(
+        480,
+        "--reference-width",
+        "-w",
+        help="Normalize screenshots to this width for reliable matching (default: 480, use 0 to disable).",
+    ),
 ) -> None:
     """Buy stamina from Black Market by detecting the window and clicking automatically.
     
@@ -129,7 +148,7 @@ def run(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    runner = _build_runner(resolved, dry_run=dry_run, max_retries=max_retries)
+    runner = _build_runner(resolved, dry_run=dry_run, max_retries=max_retries, reference_width=reference_width)
     results = runner.run(resolved.targets)
 
     failures = [r for r in results if not r.successful]

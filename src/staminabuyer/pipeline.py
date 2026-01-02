@@ -52,6 +52,7 @@ class PipelineOptions:
     template_scales: tuple[float, ...] = tuple(round(0.4 + i * 0.02, 2) for i in range(81))  # 0.40 to 2.00 in 0.02 steps
     normalize_resolution: tuple[int, int] | None = None  # Let multi-scale handle resolution differences
     template_source_resolution: tuple[int, int] | None = None  # Not using dynamic scaling
+    reference_width: int | None = None  # Normalize screenshots to this width (maintains aspect ratio, more robust)
     save_debug_screenshots: bool = False  # Save screenshots when matching fails
 
 
@@ -90,6 +91,7 @@ class PipelineRunner:
             console=self.console,  # Pass console for verbose logging
             normalize_resolution=options.normalize_resolution,
             template_source_resolution=options.template_source_resolution,
+            reference_width=options.reference_width,
         )
 
     def run(self, targets: Sequence[EmulatorTarget]) -> list[PipelineResult]:

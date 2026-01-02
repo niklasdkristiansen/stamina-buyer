@@ -64,6 +64,7 @@ class TemplateLibrary:
         console: Any | None = None,  # Rich Console for logging
         normalize_resolution: tuple[int, int] | None = None,  # (width, height) to normalize screenshots to
         template_source_resolution: tuple[int, int] | None = None,  # (width, height) of screenshot templates were extracted from
+        reference_width: int | None = None,  # Normalize screenshots to this width (maintains aspect ratio)
     ) -> None:
         self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
@@ -82,6 +83,7 @@ class TemplateLibrary:
         self.descriptor_min_matches = descriptor_min_matches
         self.normalize_resolution = normalize_resolution
         self.template_source_resolution = template_source_resolution
+        self.reference_width = reference_width
         self._orb = cv2.ORB_create()
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self._templates: dict[str, dict[float, TemplateVariant]] = {}
@@ -175,12 +177,39 @@ class TemplateLibrary:
         if color_frame is None:
             raise ValueError("Unable to decode framebuffer for matching.")
         
+        orig_height, orig_width = color_frame.shape[:2]
+        
+        # Always log the screenshot resolution for debugging
+        if self._console:
+            self._console.log(f"[dim]Screenshot resolution: {orig_width}×{orig_height}[/dim]")
+        
         scale_x = 1.0
         scale_y = 1.0
         
-        # Normalize resolution if configured
-        if self.normalize_resolution:
-            orig_height, orig_width = color_frame.shape[:2]
+        # Reference width normalization (maintains aspect ratio - preferred method)
+        if self.reference_width and orig_width != self.reference_width:
+            # Scale to reference width while maintaining aspect ratio
+            scale_factor = self.reference_width / orig_width
+            target_width = self.reference_width
+            target_height = int(orig_height * scale_factor)
+            
+            # Calculate scale factors for coordinate conversion later
+            scale_x = orig_width / target_width
+            scale_y = orig_height / target_height
+            
+            color_frame = cv2.resize(
+                color_frame,
+                (target_width, target_height),
+                interpolation=cv2.INTER_AREA if scale_factor < 1.0 else cv2.INTER_CUBIC
+            )
+            
+            if self._console:
+                self._console.log(
+                    f"[cyan]Normalized to reference width: {orig_width}×{orig_height} → "
+                    f"{target_width}×{target_height} (scale: {scale_factor:.3f}x)[/cyan]"
+                )
+        # Fixed resolution normalization (stretches to exact size)
+        elif self.normalize_resolution:
             target_width, target_height = self.normalize_resolution
             
             # Only normalize if dimensions differ

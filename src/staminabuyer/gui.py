@@ -129,6 +129,26 @@ class StaminaBuyerGUI(ctk.CTk):
         )
         self.stamina_entry.insert(0, "100")
         
+        # Reference width for resolution normalization
+        self.reference_width_label = ctk.CTkLabel(
+            self.target_frame,
+            text="Reference Width:"
+        )
+        
+        self.reference_width_entry = ctk.CTkEntry(
+            self.target_frame,
+            placeholder_text="e.g., 480",
+            width=100
+        )
+        self.reference_width_entry.insert(0, "480")  # Default based on template screenshots
+        
+        self.reference_width_help = ctk.CTkLabel(
+            self.target_frame,
+            text="(normalizes screenshots for reliable matching)",
+            font=ctk.CTkFont(size=10),
+            text_color="gray"
+        )
+        
         self.add_target_button = ctk.CTkButton(
             self.target_frame,
             text="➕ Add Target",
@@ -232,7 +252,10 @@ class StaminaBuyerGUI(ctk.CTk):
         config_frame = ctk.CTkFrame(self.target_frame, fg_color="transparent")
         config_frame.pack(fill="x", padx=10, pady=5)
         self.stamina_label.pack(side="left", padx=(0, 10))
-        self.stamina_entry.pack(side="left", padx=(0, 10))
+        self.stamina_entry.pack(side="left", padx=(0, 20))
+        self.reference_width_label.pack(side="left", padx=(0, 5))
+        self.reference_width_entry.pack(side="left", padx=(0, 5))
+        self.reference_width_help.pack(side="left", padx=(0, 20))
         self.add_target_button.pack(side="left")
         
         self.targets_textbox.pack(padx=10, pady=5)
@@ -422,6 +445,17 @@ class StaminaBuyerGUI(ctk.CTk):
                 for t in self.targets
             ]
             
+            # Get reference width for normalization
+            reference_width = None
+            try:
+                ref_width_str = self.reference_width_entry.get().strip()
+                if ref_width_str:
+                    reference_width = int(ref_width_str)
+                    if reference_width <= 0:
+                        reference_width = None
+            except ValueError:
+                pass  # Use None if invalid
+            
             # Create options
             options = PipelineOptions(
                 dry_run=dry_run,
@@ -430,10 +464,17 @@ class StaminaBuyerGUI(ctk.CTk):
                 post_click_delay_seconds=2.0,  # Wait for confirm dialog to appear
                 max_refreshes=100,  # Try refreshing Black Market up to 100 times (can take many tries)
                 save_debug_screenshots=True,  # Enable debug screenshots for troubleshooting
+                reference_width=reference_width,  # Normalize screenshots to consistent width
             )
             
             # Redirect logs to GUI
             console = Console(file=LogCapture(self.log_queue), force_terminal=False)
+            
+            # Log reference width setting
+            if reference_width:
+                console.log(f"[cyan]Using reference width: {reference_width}px (screenshots will be normalized)[/cyan]")
+            else:
+                console.log("[dim]No reference width set (using multi-scale matching only)[/dim]")
             
             # Run pipeline
             runner = PipelineRunner(options=options, console=console)
