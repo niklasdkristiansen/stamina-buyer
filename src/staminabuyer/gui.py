@@ -535,8 +535,8 @@ class StaminaBuyerGUI(ctk.CTk):
                 options = PipelineOptions(
                     dry_run=False,
                     max_retries=3,
-                    post_purchase_delay_seconds=3.0,
-                    post_click_delay_seconds=2.0,
+                    post_purchase_delay_seconds=1.0,
+                    post_click_delay_seconds=1.0,
                     max_refreshes=100,
                     save_debug_screenshots=True,
                     reference_width=DEFAULT_REFERENCE_WIDTH,

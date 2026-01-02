@@ -38,8 +38,8 @@ class PipelineOptions:
     max_retries: int = 3
     purchase_delay_seconds: float = 1.0
     jitter_seconds: float = 0.2
-    post_purchase_delay_seconds: float = 3.0  # Wait after successful purchase for UI to update
-    post_click_delay_seconds: float = 2.0  # Wait after clicking item for confirm dialog to appear
+    post_purchase_delay_seconds: float = 1.0  # Wait after successful purchase for UI to update
+    post_click_delay_seconds: float = 1.0  # Wait after clicking item for confirm dialog to appear
     refresh_button_icon: str = "refresh"
     max_refreshes: int = 100  # Maximum times to refresh the Black Market (can take 50-100+ tries)
     template_dir: Path | None = None
@@ -279,8 +279,8 @@ class PipelineRunner:
                     self._tap_center(client, refresh_match)
                     
                     # Wait for refresh to complete
-                    refresh_delay = 2.0
-                    self.console.log(f"[dim]Waiting {refresh_delay}s for refresh to complete...[/dim]")
+                    refresh_delay = 1.0
+                    self.console.log(f"[dim]Waiting {refresh_delay}s for refresh...[/dim]")
                     time.sleep(refresh_delay)
                 except RuntimeError:
                     self.console.log("[yellow]Refresh button not found, continuing...[/yellow]")
