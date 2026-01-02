@@ -863,7 +863,7 @@ class StaminaBuyerGUI(ctk.CTk):
         """Disable controls during operation."""
         self.detect_button.configure(state="disabled")
         self.add_target_button.configure(state="disabled")
-        self.clear_targets_button.configure(state="disabled")
+        self.load_last_button.configure(state="disabled")
         self.run_button.configure(state="disabled")
         self.cancel_button.configure(state="normal", text="⏹️ Cancel")
     
@@ -871,7 +871,7 @@ class StaminaBuyerGUI(ctk.CTk):
         """Enable controls after operation."""
         self.detect_button.configure(state="normal")
         self.add_target_button.configure(state="normal")
-        self.clear_targets_button.configure(state="normal")
+        self.load_last_button.configure(state="normal")
         self.run_button.configure(state="normal")
         self.cancel_button.configure(state="disabled", text="⏹️ Cancel")
 
