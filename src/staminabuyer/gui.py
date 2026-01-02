@@ -62,38 +62,39 @@ class TargetProgressFrame(ctk.CTkFrame):
         # Layout
         self.grid_columnconfigure(1, weight=1)
         
-        # Target name
+        # Target name (truncate longer names)
+        display_name = target_name[:25] + "..." if len(target_name) > 25 else target_name
         self.name_label = ctk.CTkLabel(
             self,
-            text=f"📱 {target_name[:30]}..." if len(target_name) > 30 else f"📱 {target_name}",
-            font=ctk.CTkFont(size=12),
+            text=f"📱 {display_name}",
+            font=ctk.CTkFont(size=11),
             anchor="w",
-            width=200
+            width=160
         )
-        self.name_label.grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.name_label.grid(row=0, column=0, padx=(6, 3), pady=3, sticky="w")
         
         # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(self, width=300)
+        self.progress_bar = ctk.CTkProgressBar(self, width=200, height=12)
         self.progress_bar.set(0)
-        self.progress_bar.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.progress_bar.grid(row=0, column=1, padx=3, pady=3, sticky="ew")
         
         # Progress text
         self.progress_label = ctk.CTkLabel(
             self,
             text=f"0/{stamina_goal}",
-            font=ctk.CTkFont(size=12),
-            width=80
+            font=ctk.CTkFont(size=11),
+            width=70
         )
-        self.progress_label.grid(row=0, column=2, padx=(5, 10), pady=5)
+        self.progress_label.grid(row=0, column=2, padx=(3, 6), pady=3)
         
         # Status indicator
         self.status_label = ctk.CTkLabel(
             self,
             text="⏳",
-            font=ctk.CTkFont(size=14),
-            width=30
+            font=ctk.CTkFont(size=12),
+            width=20
         )
-        self.status_label.grid(row=0, column=3, padx=(0, 10), pady=5)
+        self.status_label.grid(row=0, column=3, padx=(0, 6), pady=3)
     
     def update_progress(self, purchased: int):
         """Update the progress display."""
@@ -134,9 +135,9 @@ class StaminaBuyerGUI(ctk.CTk):
         super().__init__()
         
         # Configure window
-        self.title("Stamina Buyer - Evony Automation")
-        self.geometry("800x600")
-        self.minsize(600, 400)
+        self.title("Stamina Buyer")
+        self.geometry("650x480")
+        self.minsize(500, 350)
         
         # Set theme
         ctk.set_appearance_mode("dark")
@@ -159,55 +160,62 @@ class StaminaBuyerGUI(ctk.CTk):
     def _create_widgets(self):
         """Create all UI widgets."""
         
+        # Main scrollable container
+        self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        
         # Header Frame
-        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.header_frame = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         
         self.header_label = ctk.CTkLabel(
             self.header_frame,
             text="🎮 Stamina Buyer",
-            font=ctk.CTkFont(size=24, weight="bold")
+            font=ctk.CTkFont(size=20, weight="bold")
         )
         
         self.subtitle_label = ctk.CTkLabel(
             self.header_frame,
             text="Automate Black Market stamina purchases",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color="gray"
         )
         
         # === Combined Target Configuration Frame ===
-        self.config_frame = ctk.CTkFrame(self)
+        self.config_frame = ctk.CTkFrame(self.main_scroll)
         self.config_frame_label = ctk.CTkLabel(
             self.config_frame,
             text="1️⃣  Configure Targets",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(size=13, weight="bold")
         )
         
         # Window detection row
         self.detect_button = ctk.CTkButton(
             self.config_frame,
-            text="🔍 Detect Windows",
+            text="🔍 Detect",
             command=self._detect_windows,
-            width=140
+            width=90,
+            height=28
         )
         
         self.window_dropdown = ctk.CTkComboBox(
             self.config_frame,
-            values=["Click 'Detect Windows' first..."],
-            width=350,
+            values=["Click 'Detect' first..."],
+            width=280,
+            height=28,
             state="readonly"
         )
         
         # Stamina input
         self.stamina_label = ctk.CTkLabel(
             self.config_frame,
-            text="Stamina:"
+            text="Stamina:",
+            font=ctk.CTkFont(size=12)
         )
         
         self.stamina_entry = ctk.CTkEntry(
             self.config_frame,
             placeholder_text="100",
-            width=80
+            width=60,
+            height=28
         )
         self.stamina_entry.insert(0, "100")
         
@@ -215,40 +223,44 @@ class StaminaBuyerGUI(ctk.CTk):
             self.config_frame,
             text="➕ Add",
             command=self._add_target,
-            width=80
+            width=70,
+            height=28
         )
         
         # Targets List
         self.targets_textbox = ctk.CTkTextbox(
             self.config_frame,
-            height=60,
+            height=50,
+            font=ctk.CTkFont(size=11),
             state="disabled"
         )
         
         self.clear_targets_button = ctk.CTkButton(
             self.config_frame,
-            text="🗑️ Clear All",
+            text="🗑️ Clear",
             command=self._clear_targets,
-            width=100,
+            width=70,
+            height=24,
+            font=ctk.CTkFont(size=11),
             fg_color="#8B0000",
             hover_color="#5C0000"
         )
         
         # === Run Frame ===
-        self.run_frame = ctk.CTkFrame(self)
+        self.run_frame = ctk.CTkFrame(self.main_scroll)
         self.run_frame_label = ctk.CTkLabel(
             self.run_frame,
             text="2️⃣  Run",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(size=13, weight="bold")
         )
         
         self.run_button = ctk.CTkButton(
             self.run_frame,
-            text="🚀 Start Buying Stamina",
+            text="🚀 Start",
             command=self._run_purchase,
-            width=250,
-            height=45,
-            font=ctk.CTkFont(size=15, weight="bold"),
+            width=100,
+            height=32,
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#228B22",
             hover_color="#006400"
         )
@@ -257,39 +269,40 @@ class StaminaBuyerGUI(ctk.CTk):
             self.run_frame,
             text="⏹️ Cancel",
             command=self._cancel_run,
-            width=120,
-            height=45,
-            font=ctk.CTkFont(size=14),
+            width=80,
+            height=32,
+            font=ctk.CTkFont(size=12),
             fg_color="#8B0000",
             hover_color="#5C0000",
             state="disabled"
         )
         
         # === Progress Frame ===
-        self.progress_frame = ctk.CTkFrame(self)
+        self.progress_frame = ctk.CTkFrame(self.main_scroll)
         self.progress_frame_label = ctk.CTkLabel(
             self.progress_frame,
             text="📊 Progress",
-            font=ctk.CTkFont(size=14, weight="bold")
+            font=ctk.CTkFont(size=12, weight="bold")
         )
         
         # Scrollable frame for target progress bars
         self.progress_scroll = ctk.CTkScrollableFrame(
             self.progress_frame,
-            height=80
+            height=60
         )
         
         # === Log Frame ===
-        self.log_frame = ctk.CTkFrame(self)
+        self.log_frame = ctk.CTkFrame(self.main_scroll)
         self.log_frame_label = ctk.CTkLabel(
             self.log_frame,
-            text="📋 Activity Log",
-            font=ctk.CTkFont(size=14, weight="bold")
+            text="📋 Log",
+            font=ctk.CTkFont(size=12, weight="bold")
         )
         
         self.log_textbox = ctk.CTkTextbox(
             self.log_frame,
-            height=100,
+            height=120,
+            font=ctk.CTkFont(size=11),
             state="disabled"
         )
         
@@ -297,62 +310,63 @@ class StaminaBuyerGUI(ctk.CTk):
             self.log_frame,
             text="Clear",
             command=self._clear_log,
-            width=80
+            width=60,
+            height=24,
+            font=ctk.CTkFont(size=11)
         )
     
     def _layout_widgets(self):
-        """Layout all widgets using grid for better resizing."""
+        """Layout all widgets in a scrollable container."""
         
-        # Configure grid weights for resizing
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)  # Log frame expands
+        # Main scrollable frame fills the window
+        self.main_scroll.pack(fill="both", expand=True, padx=3, pady=3)
         
-        # Header (row 0)
-        self.header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(10, 5))
+        # Header
+        self.header_frame.pack(fill="x", padx=10, pady=(3, 3))
         self.header_label.pack()
         self.subtitle_label.pack()
         
-        # === Config Frame (row 1) ===
-        self.config_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=5)
-        self.config_frame_label.pack(anchor="w", padx=10, pady=(8, 5))
+        # === Config Frame ===
+        self.config_frame.pack(fill="x", padx=8, pady=3)
+        self.config_frame_label.pack(anchor="w", padx=8, pady=(5, 3))
         
         # Row 1: Window detection + stamina + add button
         row1 = ctk.CTkFrame(self.config_frame, fg_color="transparent")
-        row1.pack(fill="x", padx=10, pady=3)
+        row1.pack(fill="x", padx=8, pady=2)
         
-        self.detect_button.pack(side="left", padx=(0, 8))
-        self.window_dropdown.pack(side="left", padx=(0, 15))
-        self.stamina_label.pack(side="left", padx=(0, 5))
-        self.stamina_entry.pack(side="left", padx=(0, 8))
+        self.detect_button.pack(side="left", padx=(0, 6))
+        self.window_dropdown.pack(side="left", padx=(0, 10))
+        self.stamina_label.pack(side="left", padx=(0, 3))
+        self.stamina_entry.pack(side="left", padx=(0, 6))
         self.add_target_button.pack(side="left")
         
         # Row 2: Targets list
-        self.targets_textbox.pack(fill="x", padx=10, pady=3)
-        self.clear_targets_button.pack(anchor="e", padx=10, pady=(0, 8))
+        self.targets_textbox.pack(fill="x", padx=8, pady=2)
+        self.clear_targets_button.pack(anchor="e", padx=8, pady=(0, 5))
         
-        # === Run Frame (row 2) ===
-        self.run_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=5)
-        self.run_frame_label.pack(anchor="w", padx=10, pady=(8, 5))
+        # === Run Frame ===
+        self.run_frame.pack(fill="x", padx=8, pady=3)
+        self.run_frame_label.pack(anchor="w", padx=8, pady=(5, 3))
         
         buttons_row = ctk.CTkFrame(self.run_frame, fg_color="transparent")
-        buttons_row.pack(padx=10, pady=(3, 10))
-        self.run_button.pack(side="left", padx=(0, 15))
+        buttons_row.pack(padx=8, pady=(2, 6))
+        self.run_button.pack(side="left", padx=(0, 10))
         self.cancel_button.pack(side="left")
         
-        # === Progress Frame (row 3) ===
-        self.progress_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=5)
-        self.progress_frame_label.pack(anchor="w", padx=10, pady=(8, 3))
-        self.progress_scroll.pack(fill="x", padx=10, pady=(0, 8))
+        # === Progress Frame ===
+        self.progress_frame.pack(fill="x", padx=8, pady=3)
+        self.progress_frame_label.pack(anchor="w", padx=8, pady=(5, 2))
+        self.progress_scroll.pack(fill="x", padx=8, pady=(0, 5))
         
-        # === Log Frame (row 4 - expandable) ===
-        self.log_frame.grid(row=4, column=0, sticky="nsew", padx=15, pady=(5, 10))
+        # === Log Frame ===
+        self.log_frame.pack(fill="x", padx=8, pady=(3, 6))
         
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        log_header.pack(fill="x", padx=10, pady=(8, 3))
+        log_header.pack(fill="x", padx=8, pady=(5, 2))
         self.log_frame_label.pack(side="left")
         self.clear_log_button.pack(side="right")
         
-        self.log_textbox.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.log_textbox.pack(fill="x", padx=8, pady=(0, 5))
     
     def _detect_windows(self):
         """Detect emulator windows."""
@@ -402,7 +416,7 @@ class StaminaBuyerGUI(ctk.CTk):
         window_title = self.window_dropdown.get()
         stamina_str = self.stamina_entry.get().strip()
         
-        if not window_title or window_title.startswith("Click") or window_title.startswith("No windows") or window_title.startswith("──"):
+        if not window_title or window_title.startswith("Click") or window_title.startswith("No ") or window_title.startswith("──"):
             self._log("⚠️ Please select a window first")
             return
         
