@@ -241,13 +241,24 @@ class PipelineRunner:
                                 abs(bought_match.top_left[1] - regular_match.top_left[1]) < 20
                             )
                             
-                            # If bought template matches at same location with decent score, skip it
-                            if same_location and bought_score >= 0.3:
+                            # Only consider "bought" if the bought template scores HIGHER than regular
+                            # This prevents false positives where both templates match similar scores
+                            is_actually_bought = (
+                                same_location and 
+                                bought_score >= 0.5 and  # Reasonable minimum
+                                bought_score > regular_score  # Bought must score higher than regular
+                            )
+                            
+                            if is_actually_bought:
                                 self.console.log(
                                     f"[yellow]Skipping '{stamina_item.template_name}' at {regular_match.top_left} - "
-                                    f"already purchased (bought indicator present: score {bought_score:.3f})[/yellow]"
+                                    f"already purchased (bought: {bought_score:.3f} > regular: {regular_score:.3f})[/yellow]"
                                 )
                                 continue  # Try next stamina item type
+                            else:
+                                self.console.log(
+                                    f"[dim]Bought check: regular={regular_score:.3f}, bought={bought_score:.3f} → not bought[/dim]"
+                                )
                     
                     # This is a valid, unpurchased item
                     self.console.log(
