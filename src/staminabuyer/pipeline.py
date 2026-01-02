@@ -6,7 +6,6 @@ import random
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from math import ceil
 from pathlib import Path
 
 from rich.console import Console

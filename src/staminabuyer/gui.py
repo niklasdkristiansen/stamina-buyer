@@ -17,7 +17,6 @@ from typing import Any
 
 try:
     import customtkinter as ctk
-    from PIL import Image
     
     HAS_GUI_DEPS = True
 except ImportError:
@@ -538,7 +537,6 @@ class StaminaBuyerGUI(ctk.CTk):
                     post_purchase_delay_seconds=1.0,
                     post_click_delay_seconds=1.0,
                     max_refreshes=100,
-                    save_debug_screenshots=True,
                     reference_width=DEFAULT_REFERENCE_WIDTH,
                 )
                 
