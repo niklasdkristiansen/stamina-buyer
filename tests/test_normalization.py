@@ -7,8 +7,8 @@ Tests verify that:
 3. Multi-scale works as fallback
 4. Wrong resolution handling
 
-NOTE: The templates were created from ~436x790 resolution screenshots, NOT 480x870!
-This is why multi-scale matching finds them at 1.1x scale in screenshot-bm.png.
+NOTE: The stamina_10 template (242x332) was extracted from a ~960x1740 screenshot.
+It matches screenshot-bm.png (480x870) at scale 0.5.
 """
 
 from pathlib import Path
@@ -18,9 +18,9 @@ import numpy as np
 
 from staminabuyer.vision.matcher import TemplateLibrary
 
-# The actual resolution the templates were created from
-# (Discovered by testing: screenshot-bm.png is 480x870, template matches at 1.1x scale)
-TEMPLATE_NATIVE_RESOLUTION = (436, 790)  # width, height
+# The actual resolution the stamina_10 template was created from
+# Template is 242x332, needs 0.5x scale for 480x870, so source was ~960x1740
+TEMPLATE_NATIVE_RESOLUTION = (960, 1740)  # width, height
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ class TestCoordinateConversion:
         """Without normalization, need multi-scale to find template."""
         library = TemplateLibrary(
             threshold=0.70,
-            scales=(1.0, 1.1),  # Need 1.1x scale since template is from smaller resolution
+            scales=(0.5, 0.6),  # Need 0.5x scale since template is from larger resolution (~960x1740)
             grayscale=True,
             descriptor_min_matches=10,
             normalize_resolution=None,  # No normalization
