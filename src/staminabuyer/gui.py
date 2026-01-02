@@ -22,12 +22,10 @@ try:
 except ImportError:
     HAS_GUI_DEPS = False
 
-
 from rich.console import Console
 
 from .config import EmulatorTarget
 from .pipeline import PipelineOptions, PipelineRunner
-
 
 # Default reference width for template matching (matches template extraction resolution)
 # Templates were extracted from ~341-344px wide screenshots
@@ -510,7 +508,7 @@ class StaminaBuyerGUI(ctk.CTk):
     def _execute_pipeline(self):
         """Execute the pipeline (runs in background thread)."""
         try:
-            from .pipeline import PipelineResult, CancelledError
+            from .pipeline import CancelledError, PipelineResult
             
             # Redirect logs to GUI
             console = Console(file=LogCapture(self.log_queue), force_terminal=False)
@@ -519,7 +517,7 @@ class StaminaBuyerGUI(ctk.CTk):
             
             for i, target in enumerate(self.targets):
                 if self.cancel_requested:
-                    self._log(f"⏹️ Skipping remaining targets")
+                    self._log("⏹️ Skipping remaining targets")
                     # Mark remaining as cancelled
                     for j in range(i, len(self.targets)):
                         self.log_queue.put(("target_cancelled", j))

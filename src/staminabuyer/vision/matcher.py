@@ -255,7 +255,16 @@ class TemplateLibrary:
         interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
         return cv2.resize(image, (new_width, new_height), interpolation=interpolation)
 
-    def match(self, frame: bytes, icon_names: Iterable[str]) -> list[MatchResult]:
+    def match(self, frame: bytes, icon_names: Iterable[str], threshold: float | None = None) -> list[MatchResult]:
+        """
+        Match templates against a frame.
+        
+        Args:
+            frame: Screenshot bytes (PNG/JPEG)
+            icon_names: Template names to search for
+            threshold: Optional override for match threshold (uses library default if None)
+        """
+        effective_threshold = threshold if threshold is not None else self.threshold
         color_frame, decoded, (scale_x, scale_y) = self._decode_frame(frame)
         # Verbose logging removed for cleaner output - best match shown at end
         matches: list[MatchResult] = []
@@ -278,7 +287,7 @@ class TemplateLibrary:
                     best_score = max_val
                     best_icon = icon_name
                     best_scale = scale
-                if max_val >= self.threshold:
+                if max_val >= effective_threshold:
                     h, w = template.shape[:2]
                     top_left = max_loc
                     bottom_right = (top_left[0] + w, top_left[1] + h)
@@ -328,17 +337,17 @@ class TemplateLibrary:
                         icon_name,
                         scale,
                         max_val,
-                        self.threshold,
+                        effective_threshold,
                     )
         if not matches and best_icon:
-            msg = f"❌ No match: best was '{best_icon}' @ scale {best_scale:.2f}x, score {best_score:.3f} (threshold: {self.threshold:.2f})"
+            msg = f"❌ No match: best was '{best_icon}' @ scale {best_scale:.2f}x, score {best_score:.3f} (threshold: {effective_threshold:.2f})"
             if self._console:
                 self._console.log(f"[yellow]{msg}[/yellow]")
             else:
                 self._logger.info(msg)
         elif not matches:
             if self._console:
-                self._console.log(f"[yellow]❌ No templates matched at all[/yellow]")
+                self._console.log("[yellow]❌ No templates matched at all[/yellow]")
         return matches
 
     def _passes_descriptor_check(

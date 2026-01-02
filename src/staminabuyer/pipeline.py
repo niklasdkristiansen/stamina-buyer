@@ -45,6 +45,7 @@ class PipelineOptions:
     confirm_icon_name: str = "to_confirm"
     gem_button_vertical_ratio: float = 0.9
     template_threshold: float = 0.75  # Safe margin above 0.64 false positive; 0.02 scale steps ensure reliable matching
+    bought_threshold: float = 0.5  # Lower threshold for detecting "already bought" items
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
     # Templates are scale-sensitive; 0.02 step increments ensure we hit the exact scale needed
     # Range 0.4-2.0 covers emulator windows from ~200px to ~2000px width
@@ -247,57 +248,68 @@ class PipelineRunner:
         for refresh_attempt in range(self.options.max_refreshes + 1):
             self._check_cancelled()
             
-            # Try to find any stamina item (try in priority order)
             frame = client.screencap()
             
-            for stamina_item in STAMINA_ITEMS:
-                # Check for regular version
-                regular_matches = self._templates.match(frame, [stamina_item.template_name])
+            # Match all templates (regular and bought) with low threshold to get scores
+            all_templates = []
+            for item in STAMINA_ITEMS:
+                all_templates.append(item.template_name)
+                if item.bought_template_name:
+                    all_templates.append(item.bought_template_name)
+            
+            # Get scores for all templates (use low threshold to see everything)
+            scores: dict[str, tuple[float, MatchResult | None]] = {}
+            for template_name in all_templates:
+                matches = self._templates.match(frame, [template_name], threshold=0.3)
+                if matches:
+                    scores[template_name] = (matches[0].score, matches[0])
+                else:
+                    scores[template_name] = (0.0, None)
+            
+            # Log all scores for debugging
+            self.console.log("[dim]Template scores: " + ", ".join(
+                f"{k}={v[0]:.3f}" for k, v in scores.items()
+            ) + "[/dim]")
+            
+            # Determine which item type is on screen by comparing regular scores
+            stamina_10_score = scores.get("stamina_10", (0.0, None))[0]
+            stamina_1_score = scores.get("stamina_1", (0.0, None))[0]
+            
+            # Sort items by their regular score (highest first) to check the best match first
+            sorted_items = sorted(
+                STAMINA_ITEMS,
+                key=lambda item: scores.get(item.template_name, (0.0, None))[0],
+                reverse=True
+            )
+            
+            self.console.log(
+                f"[dim]Item detection: stamina_10={stamina_10_score:.3f}, stamina_1={stamina_1_score:.3f} "
+                f"→ checking {sorted_items[0].template_name} first[/dim]"
+            )
+            
+            # Check items in order of best match
+            for stamina_item in sorted_items:
+                regular_score, regular_match = scores.get(stamina_item.template_name, (0.0, None))
+                bought_score, _ = scores.get(stamina_item.bought_template_name, (0.0, None)) if stamina_item.bought_template_name else (0.0, None)
                 
-                if regular_matches:
-                    regular_match = regular_matches[0]
-                    regular_score = regular_match.score
-                    
-                    # If this item has a "bought" version, check if it's been purchased
-                    # by looking for the bought indicator in the SAME location
-                    if stamina_item.bought_template_name:
-                        bought_matches = self._templates.match(frame, [stamina_item.bought_template_name])
-                        
-                        if bought_matches:
-                            bought_match = bought_matches[0]
-                            bought_score = bought_match.score
-                            
-                            # Check if the bought version is at the same location (within tolerance)
-                            same_location = (
-                                abs(bought_match.top_left[0] - regular_match.top_left[0]) < 20 and
-                                abs(bought_match.top_left[1] - regular_match.top_left[1]) < 20
-                            )
-                            
-                            # If bought template matches above threshold at same location, it's bought
-                            # The bought template specifically includes the "purchased" overlay,
-                            # so a high match means that overlay is present
-                            is_actually_bought = (
-                                same_location and 
-                                bought_score >= self.options.template_threshold
-                            )
-                            
-                            if is_actually_bought:
-                                self.console.log(
-                                    f"[yellow]Skipping '{stamina_item.template_name}' at {regular_match.top_left} - "
-                                    f"already purchased (bought score: {bought_score:.3f} >= {self.options.template_threshold})[/yellow]"
-                                )
-                                continue  # Try next stamina item type
-                            else:
-                                self.console.log(
-                                    f"[dim]Bought check: bought={bought_score:.3f} < threshold={self.options.template_threshold:.3f} → not bought[/dim]"
-                                )
-                    
-                    # This is a valid, unpurchased item
+                # Must have a decent regular match
+                if regular_score < self.options.template_threshold:
+                    continue
+                
+                # Check if bought scores higher than regular
+                if bought_score > regular_score:
                     self.console.log(
-                        f"Found '{stamina_item.template_name}' ({stamina_item.stamina_amount} stamina) "
-                        f"with score {regular_score:.3f} at {regular_match.top_left}->{regular_match.bottom_right}."
+                        f"[yellow]Skipping '{stamina_item.template_name}' - already purchased "
+                        f"(bought: {bought_score:.3f} > regular: {regular_score:.3f})[/yellow]"
                     )
-                    return regular_match, stamina_item
+                    continue
+                
+                # This item is available!
+                self.console.log(
+                    f"Found '{stamina_item.template_name}' ({stamina_item.stamina_amount} stamina) "
+                    f"with score {regular_score:.3f} (bought: {bought_score:.3f})"
+                )
+                return regular_match, stamina_item
             
             # No stamina found
             if refresh_attempt < self.options.max_refreshes:
@@ -374,9 +386,10 @@ class PipelineRunner:
     def _save_debug_screenshot(self, frame: bytes, icon_name: str) -> None:
         """Save a debug screenshot when template matching fails."""
         try:
+            from datetime import datetime
+
             import cv2
             import numpy as np
-            from datetime import datetime
             
             # Decode the frame
             array = np.frombuffer(frame, dtype=np.uint8)

@@ -16,7 +16,7 @@ try:
     import pyautogui
     
     HAS_SCREEN_CAPTURE = True
-except (ImportError, KeyError, Exception) as e:
+except (ImportError, KeyError, Exception):
     # ImportError: missing package
     # KeyError: DISPLAY env var not set on Linux
     # Exception: Xlib.error.DisplayConnectionError when no X11 display available
@@ -37,8 +37,7 @@ except ImportError as e:
 
 try:
     # macOS-specific imports
-    import Quartz
-    from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+    from Quartz import CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly
     
     HAS_QUARTZ = True
 except ImportError as e:
@@ -417,7 +416,7 @@ def list_windows_debug() -> tuple[list[str], dict[str, any]]:
                     stats["with_title"] += 1
                     results.append(title)
                     
-            except Exception as e:
+            except Exception:
                 stats["errors"] += 1
             
             return True  # Continue enumeration
@@ -456,7 +455,7 @@ def list_windows_debug() -> tuple[list[str], dict[str, any]]:
                         windows.append(owner)
                         seen_apps.add(owner)
                         
-            except Exception as e:
+            except Exception:
                 stats["errors"] += 1
         
         return windows, stats
