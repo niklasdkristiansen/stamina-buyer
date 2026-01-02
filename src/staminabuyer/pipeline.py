@@ -257,12 +257,14 @@ class PipelineRunner:
                 if item.bought_template_name:
                     all_templates.append(item.bought_template_name)
             
-            # Get scores for all templates (use low threshold to see everything)
+            # Get BEST scores for all templates (use low threshold to see everything)
             scores: dict[str, tuple[float, MatchResult | None]] = {}
             for template_name in all_templates:
                 matches = self._templates.match(frame, [template_name], threshold=0.3)
                 if matches:
-                    scores[template_name] = (matches[0].score, matches[0])
+                    # Take the BEST match (highest score), not just the first one
+                    best_match = max(matches, key=lambda m: m.score)
+                    scores[template_name] = (best_match.score, best_match)
                 else:
                     scores[template_name] = (0.0, None)
             
