@@ -414,46 +414,45 @@ class StaminaBuyerGUI(ctk.CTk):
         self.header_label.pack()
         self.subtitle_label.pack()
         
-        # === Config Frame ===
-        self.config_frame.pack(fill="x", padx=8, pady=3)
-        self.config_frame_label.pack(anchor="w", padx=8, pady=(5, 3))
+        # === Config Frame (compact) ===
+        self.config_frame.pack(fill="x", padx=8, pady=2)
+        self.config_frame_label.pack(anchor="w", padx=8, pady=(4, 2))
         
-        # Row 1: Window detection + stamina + add button
+        # Row 1: Window detection + stamina + add button (using grid in a sub-frame)
         row1 = ctk.CTkFrame(self.config_frame, fg_color="transparent")
         row1.pack(fill="x", padx=8, pady=2)
         
-        self.detect_button.pack(side="left", padx=(0, 6))
-        self.window_dropdown.pack(side="left", padx=(0, 10))
-        self.stamina_label.pack(side="left", padx=(0, 3))
-        self.stamina_entry.pack(side="left", padx=(0, 6))
-        self.add_target_button.pack(side="left")
+        self.detect_button.grid(row=0, column=0, padx=(0, 4), in_=row1)
+        self.window_dropdown.grid(row=0, column=1, padx=(0, 8), in_=row1)
+        self.stamina_label.grid(row=0, column=2, padx=(0, 2), in_=row1)
+        self.stamina_entry.grid(row=0, column=3, padx=(0, 4), in_=row1)
+        self.add_target_button.grid(row=0, column=4, in_=row1)
         
         # Row 2: Targets list
-        self.targets_scroll.pack(fill="x", padx=8, pady=2)
+        self.targets_scroll.pack(fill="x", padx=8, pady=(0, 4))
         
-        # === Run Frame ===
-        self.run_frame.pack(fill="x", padx=8, pady=3)
-        self.run_frame_label.pack(anchor="w", padx=8, pady=(5, 3))
+        # === Run Frame (compact - label and buttons on same row) ===
+        self.run_frame.pack(fill="x", padx=8, pady=2)
+        self.run_frame.grid_columnconfigure(0, weight=1)
         
-        buttons_row = ctk.CTkFrame(self.run_frame, fg_color="transparent")
-        buttons_row.pack(padx=8, pady=(2, 6))
-        self.run_button.pack(side="left", padx=(0, 10))
-        self.cancel_button.pack(side="left")
+        self.run_frame_label.grid(row=0, column=0, padx=8, pady=6, sticky="w")
+        self.run_button.grid(row=0, column=1, padx=2, pady=6)
+        self.cancel_button.grid(row=0, column=2, padx=(2, 8), pady=6)
         
-        # === Progress Frame ===
-        self.progress_frame.pack(fill="x", padx=8, pady=3)
-        self.progress_frame_label.pack(anchor="w", padx=8, pady=(5, 2))
-        self.progress_scroll.pack(fill="x", padx=8, pady=(0, 5))
+        # === Progress Frame (compact) ===
+        self.progress_frame.pack(fill="x", padx=8, pady=2)
+        self.progress_frame_label.pack(anchor="w", padx=8, pady=(4, 2))
+        self.progress_scroll.pack(fill="x", padx=8, pady=(0, 4))
         
-        # === Log Frame ===
-        self.log_frame.pack(fill="x", padx=8, pady=(3, 6))
+        # === Log Frame (compact) ===
+        self.log_frame.pack(fill="x", padx=8, pady=2)
         
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        log_header.pack(fill="x", padx=8, pady=(5, 2))
+        log_header.pack(fill="x", padx=8, pady=(4, 2))
         self.log_frame_label.pack(side="left")
         self.clear_log_button.pack(side="right")
         
-        self.log_textbox.pack(fill="x", padx=8, pady=(0, 5))
+        self.log_textbox.pack(fill="x", padx=8, pady=(0, 4))
     
     def _detect_windows(self):
         """Detect emulator windows."""
