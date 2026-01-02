@@ -45,11 +45,13 @@ class PipelineOptions:
     template_dir: Path | None = None
     confirm_icon_name: str = "to_confirm"
     gem_button_vertical_ratio: float = 0.9
-    template_threshold: float = 0.70  # Prevent false positives (boots score 0.688)
+    template_threshold: float = 0.70  # Prevent false positives (boots score ~0.64)
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
-    template_scales: tuple[float, ...] = (1.0,)  # Single scale when using normalization
-    normalize_resolution: tuple[int, int] | None = (480, 870)  # Portrait normalization (matches screenshot-bm.png dimensions)
-    template_source_resolution: tuple[int, int] | None = (436, 790)  # Templates were extracted at this resolution
+    # Templates are now extracted consistently from 480×870 reference screenshot
+    # Use multi-scale to handle different emulator window sizes
+    template_scales: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2.0)
+    normalize_resolution: tuple[int, int] | None = None  # Let multi-scale handle resolution differences
+    template_source_resolution: tuple[int, int] | None = None  # Not using dynamic scaling
     save_debug_screenshots: bool = False  # Save screenshots when matching fails
 
 

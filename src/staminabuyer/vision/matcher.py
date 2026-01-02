@@ -67,7 +67,10 @@ class TemplateLibrary:
     ) -> None:
         self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
-        self.scales = tuple(sorted({scale for scale in (scales or (1.0,)) if scale > 0}))
+        # Multi-scale matching to handle different emulator window sizes
+        # Templates extracted from 480×870 reference, scales handle 240×435 to 960×1740 range
+        default_scales = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2.0)
+        self.scales = tuple(sorted({scale for scale in (scales or default_scales) if scale > 0}))
         if not self.scales:
             self.scales = (1.0,)
         self.grayscale = grayscale
