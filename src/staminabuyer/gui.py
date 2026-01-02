@@ -317,9 +317,12 @@ class StaminaBuyerGUI(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold")
         )
         
-        # Window detection row
+        # Row frame for window detection controls
+        self.config_row = ctk.CTkFrame(self.config_frame, fg_color="transparent")
+        
+        # Window detection row - all children of config_row
         self.detect_button = ctk.CTkButton(
-            self.config_frame,
+            self.config_row,
             text="🔍 Detect",
             command=self._detect_windows,
             width=90,
@@ -327,22 +330,22 @@ class StaminaBuyerGUI(ctk.CTk):
         )
         
         self.window_dropdown = ctk.CTkComboBox(
-            self.config_frame,
+            self.config_row,
             values=["Click 'Detect' first..."],
-            width=280,
+            width=180,
             height=28,
             state="readonly"
         )
         
         # Stamina input
         self.stamina_label = ctk.CTkLabel(
-            self.config_frame,
+            self.config_row,
             text="Stamina:",
             font=ctk.CTkFont(size=12)
         )
         
         self.stamina_entry = ctk.CTkEntry(
-            self.config_frame,
+            self.config_row,
             placeholder_text="100",
             width=60,
             height=28
@@ -350,18 +353,18 @@ class StaminaBuyerGUI(ctk.CTk):
         self.stamina_entry.insert(0, "100")
         
         self.add_target_button = ctk.CTkButton(
-            self.config_frame,
+            self.config_row,
             text="➕ Add",
             command=self._add_target,
-            width=70,
+            width=60,
             height=28
         )
         
         self.load_last_button = ctk.CTkButton(
-            self.config_frame,
+            self.config_row,
             text="📂 Last",
             command=self._load_last_targets,
-            width=70,
+            width=60,
             height=28,
             fg_color="transparent",
             border_width=1,
@@ -468,16 +471,14 @@ class StaminaBuyerGUI(ctk.CTk):
         self.config_frame.pack(fill="x", padx=8, pady=2)
         self.config_frame_label.pack(anchor="w", padx=8, pady=(4, 2))
         
-        # Row 1: Window detection + stamina + add button (using grid in a sub-frame)
-        row1 = ctk.CTkFrame(self.config_frame, fg_color="transparent")
-        row1.pack(fill="x", padx=8, pady=2)
-        
-        self.detect_button.grid(row=0, column=0, padx=(0, 4), in_=row1)
-        self.window_dropdown.grid(row=0, column=1, padx=(0, 8), in_=row1)
-        self.stamina_label.grid(row=0, column=2, padx=(0, 2), in_=row1)
-        self.stamina_entry.grid(row=0, column=3, padx=(0, 4), in_=row1)
-        self.add_target_button.grid(row=0, column=4, padx=(0, 4), in_=row1)
-        self.load_last_button.grid(row=0, column=5, in_=row1)
+        # Row 1: Window detection + stamina + add button
+        self.config_row.pack(fill="x", padx=8, pady=2)
+        self.detect_button.pack(side="left", padx=(0, 4))
+        self.window_dropdown.pack(side="left", padx=(0, 6))
+        self.stamina_label.pack(side="left", padx=(0, 2))
+        self.stamina_entry.pack(side="left", padx=(0, 4))
+        self.add_target_button.pack(side="left", padx=(0, 4))
+        self.load_last_button.pack(side="left")
         
         # Row 2: Targets list
         self.targets_scroll.pack(fill="x", padx=8, pady=(0, 4))
