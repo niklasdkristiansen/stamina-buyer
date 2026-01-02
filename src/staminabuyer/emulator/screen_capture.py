@@ -16,8 +16,10 @@ try:
     import pyautogui
     
     HAS_SCREEN_CAPTURE = True
-except (ImportError, KeyError):
-    # KeyError happens on Linux when DISPLAY env var is not set
+except (ImportError, KeyError, Exception) as e:
+    # ImportError: missing package
+    # KeyError: DISPLAY env var not set on Linux
+    # Exception: Xlib.error.DisplayConnectionError when no X11 display available
     HAS_SCREEN_CAPTURE = False
 
 try:
