@@ -49,12 +49,14 @@ class LogCapture:
 class TargetProgressFrame(ctk.CTkFrame):
     """Frame showing progress for a single target."""
     
-    def __init__(self, master, target_name: str, stamina_goal: int, **kwargs):
+    def __init__(self, master, target_name: str, stamina_goal: int, on_remove=None, **kwargs):
         super().__init__(master, **kwargs)
         
         self.target_name = target_name
         self.stamina_goal = stamina_goal
         self.stamina_purchased = 0
+        self._on_remove = on_remove
+        self._is_running = False
         
         # Layout
         self.grid_columnconfigure(1, weight=1)
@@ -63,7 +65,7 @@ class TargetProgressFrame(ctk.CTkFrame):
         display_name = target_name[:25] + "..." if len(target_name) > 25 else target_name
         self.name_label = ctk.CTkLabel(
             self,
-            text=f"📱 {display_name}",
+            text=display_name,
             font=ctk.CTkFont(size=11),
             anchor="w",
             width=160
@@ -84,14 +86,23 @@ class TargetProgressFrame(ctk.CTkFrame):
         )
         self.progress_label.grid(row=0, column=2, padx=(3, 6), pady=3)
         
-        # Status indicator
-        self.status_label = ctk.CTkLabel(
+        # Remove button (only visible when not running)
+        self.remove_btn = ctk.CTkButton(
             self,
-            text="⏳",
+            text="✕",
+            width=24,
+            height=24,
             font=ctk.CTkFont(size=12),
-            width=20
+            fg_color="transparent",
+            hover_color="darkred",
+            command=self._handle_remove
         )
-        self.status_label.grid(row=0, column=3, padx=(0, 6), pady=3)
+        self.remove_btn.grid(row=0, column=3, padx=(0, 4), pady=3)
+    
+    def _handle_remove(self):
+        """Handle remove button click."""
+        if self._on_remove and not self._is_running:
+            self._on_remove(self)
     
     def update_progress(self, purchased: int):
         """Update the progress display."""
@@ -101,28 +112,111 @@ class TargetProgressFrame(ctk.CTkFrame):
         self.progress_label.configure(text=f"{purchased}/{self.stamina_goal}")
         
         if purchased >= self.stamina_goal:
-            self.status_label.configure(text="✅")
             self.progress_bar.configure(progress_color="green")
+            self.remove_btn.configure(state="disabled", text="✓", fg_color="green", hover_color="green")
     
     def set_active(self):
         """Mark this target as currently being processed."""
-        self.status_label.configure(text="🔄")
+        self._is_running = True
+        self.remove_btn.configure(state="disabled", text="...", fg_color="transparent")
         self.configure(border_width=2, border_color="blue")
     
     def set_complete(self, success: bool):
         """Mark this target as complete."""
+        self._is_running = False
         if success:
-            self.status_label.configure(text="✅")
             self.progress_bar.configure(progress_color="green")
+            self.remove_btn.configure(state="disabled", text="✓", fg_color="green", hover_color="green")
         else:
-            self.status_label.configure(text="❌")
             self.progress_bar.configure(progress_color="red")
+            self.remove_btn.configure(state="disabled", text="✕", fg_color="red", hover_color="red")
         self.configure(border_width=0)
     
     def set_cancelled(self):
         """Mark this target as cancelled."""
-        self.status_label.configure(text="⏹️")
+        self._is_running = False
+        self.remove_btn.configure(state="disabled", text="—", fg_color="gray", hover_color="gray")
         self.configure(border_width=0)
+
+
+class TargetListItem(ctk.CTkFrame):
+    """Interactive item for displaying/editing a target in the config list."""
+    
+    def __init__(self, master, target_name: str, stamina: int, 
+                 on_update=None, on_remove=None, **kwargs):
+        super().__init__(master, **kwargs)
+        
+        self.target_name = target_name
+        self._on_update = on_update
+        self._on_remove = on_remove
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Target name
+        display_name = target_name[:30] + "..." if len(target_name) > 30 else target_name
+        self.name_label = ctk.CTkLabel(
+            self,
+            text=display_name,
+            font=ctk.CTkFont(size=11),
+            anchor="w"
+        )
+        self.name_label.grid(row=0, column=0, padx=(8, 4), pady=4, sticky="w")
+        
+        # Stamina entry
+        self.stamina_entry = ctk.CTkEntry(
+            self,
+            width=70,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            justify="right"
+        )
+        self.stamina_entry.insert(0, str(stamina))
+        self.stamina_entry.grid(row=0, column=1, padx=2, pady=4)
+        self.stamina_entry.bind("<Return>", lambda e: self._save_stamina())
+        self.stamina_entry.bind("<FocusOut>", lambda e: self._save_stamina())
+        
+        # Label
+        self.unit_label = ctk.CTkLabel(
+            self,
+            text="stam",
+            font=ctk.CTkFont(size=10),
+            text_color="gray"
+        )
+        self.unit_label.grid(row=0, column=2, padx=(0, 4), pady=4)
+        
+        # Remove button
+        self.remove_btn = ctk.CTkButton(
+            self,
+            text="✕",
+            width=24,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color="darkred",
+            command=self._handle_remove
+        )
+        self.remove_btn.grid(row=0, column=3, padx=(0, 4), pady=4)
+    
+    def _save_stamina(self):
+        """Save the updated stamina value."""
+        try:
+            new_stamina = int(self.stamina_entry.get().strip())
+            if new_stamina > 0 and self._on_update:
+                self._on_update(self.target_name, new_stamina)
+        except ValueError:
+            pass  # Invalid input, ignore
+    
+    def _handle_remove(self):
+        """Handle remove button click."""
+        if self._on_remove:
+            self._on_remove(self.target_name)
+    
+    def get_stamina(self) -> int:
+        """Get current stamina value."""
+        try:
+            return int(self.stamina_entry.get().strip())
+        except ValueError:
+            return 0
 
 
 class StaminaBuyerGUI(ctk.CTk):
@@ -224,23 +318,20 @@ class StaminaBuyerGUI(ctk.CTk):
             height=28
         )
         
-        # Targets List
-        self.targets_textbox = ctk.CTkTextbox(
+        # Targets List (scrollable frame for interactive items)
+        self.targets_scroll = ctk.CTkScrollableFrame(
             self.config_frame,
-            height=50,
-            font=ctk.CTkFont(size=11),
-            state="disabled"
+            height=60,
+            label_text=""
         )
+        self.target_list_items: list[TargetListItem] = []
         
-        self.clear_targets_button = ctk.CTkButton(
-            self.config_frame,
-            text="🗑️ Clear",
-            command=self._clear_targets,
-            width=70,
-            height=24,
+        # Empty state label
+        self.targets_empty_label = ctk.CTkLabel(
+            self.targets_scroll,
+            text="No targets added. Select a window above and click Add.",
             font=ctk.CTkFont(size=11),
-            fg_color="#8B0000",
-            hover_color="#5C0000"
+            text_color="gray"
         )
         
         # === Run Frame ===
@@ -338,8 +429,7 @@ class StaminaBuyerGUI(ctk.CTk):
         self.add_target_button.pack(side="left")
         
         # Row 2: Targets list
-        self.targets_textbox.pack(fill="x", padx=8, pady=2)
-        self.clear_targets_button.pack(anchor="e", padx=8, pady=(0, 5))
+        self.targets_scroll.pack(fill="x", padx=8, pady=2)
         
         # === Run Frame ===
         self.run_frame.pack(fill="x", padx=8, pady=3)
@@ -441,18 +531,47 @@ class StaminaBuyerGUI(ctk.CTk):
         self._update_targets_display()
         self._log("🗑️ Cleared targets")
     
+    def _update_target_stamina(self, target_name: str, new_stamina: int):
+        """Update stamina for a target."""
+        for t in self.targets:
+            if t["name"] == target_name:
+                t["stamina"] = new_stamina
+                break
+    
+    def _remove_target(self, target_name: str):
+        """Remove a target from the list."""
+        self.targets = [t for t in self.targets if t["name"] != target_name]
+        self._update_targets_display()
+    
     def _update_targets_display(self):
-        """Update the targets textbox."""
-        self.targets_textbox.configure(state="normal")
-        self.targets_textbox.delete("1.0", "end")
+        """Update the targets list with interactive items."""
+        # Clear existing items
+        for item in self.target_list_items:
+            item.destroy()
+        self.target_list_items.clear()
         
         if not self.targets:
-            self.targets_textbox.insert("1.0", "No targets added yet. Select a window and click Add.")
+            self.targets_empty_label.pack(pady=8)
         else:
-            lines = [f"{i}. {t['name']} → {t['stamina']} stamina" for i, t in enumerate(self.targets, 1)]
-            self.targets_textbox.insert("1.0", "\n".join(lines))
-        
-        self.targets_textbox.configure(state="disabled")
+            self.targets_empty_label.pack_forget()
+            for target in self.targets:
+                item = TargetListItem(
+                    self.targets_scroll,
+                    target["name"],
+                    target["stamina"],
+                    on_update=self._update_target_stamina,
+                    on_remove=self._remove_target
+                )
+                item.pack(fill="x", pady=1)
+                self.target_list_items.append(item)
+    
+    def _sync_target_values(self):
+        """Sync stamina values from the UI entries to the targets list."""
+        for i, item in enumerate(self.target_list_items):
+            if i < len(self.targets):
+                stamina = item.get_stamina()
+                if stamina > 0:
+                    self.targets[i]["stamina"] = stamina
     
     def _run_purchase(self):
         """Run the purchase pipeline."""
@@ -463,6 +582,9 @@ class StaminaBuyerGUI(ctk.CTk):
         if self.is_running:
             self._log("⚠️ Already running!")
             return
+        
+        # Sync any pending edits from the UI
+        self._sync_target_values()
         
         self.is_running = True
         self.cancel_requested = False
@@ -496,14 +618,33 @@ class StaminaBuyerGUI(ctk.CTk):
         self.target_frames.clear()
         
         # Create new progress frames
-        for target in self.targets:
+        for i, target in enumerate(self.targets):
             frame = TargetProgressFrame(
                 self.progress_scroll,
                 target["name"],
-                target["stamina"]
+                target["stamina"],
+                on_remove=lambda f, idx=i: self._remove_target_by_frame(f, idx)
             )
             frame.pack(fill="x", pady=2)
             self.target_frames.append(frame)
+    
+    def _remove_target_by_frame(self, frame: TargetProgressFrame, index: int):
+        """Remove a target from the queue."""
+        if self.is_running:
+            return  # Can't remove while running
+        
+        # Find and remove the frame
+        if frame in self.target_frames:
+            frame_idx = self.target_frames.index(frame)
+            self.target_frames.remove(frame)
+            frame.destroy()
+            
+            # Remove corresponding target
+            if frame_idx < len(self.targets):
+                self.targets.pop(frame_idx)
+            
+            # Rebuild the display to fix indices
+            self._setup_progress_display()
     
     def _execute_pipeline(self):
         """Execute the pipeline (runs in background thread)."""
