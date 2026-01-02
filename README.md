@@ -38,6 +38,13 @@ Download the latest release for your platform:
 - Any Android emulator with Evony installed
 - Emulator window must be visible during operation
 
+## Tested Setup
+
+This tool has been tested with:
+- **Emulator:** BlueStacks
+- **Resolution:** 1920×1080 (landscape mode)
+- **Window size:** ~350px width (resize the emulator window to be small)
+
 ## License
 
 MIT License - Free to use, modify, and distribute with attribution.
