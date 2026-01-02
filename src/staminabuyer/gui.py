@@ -10,8 +10,10 @@ Provides a user-friendly interface for:
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
+from pathlib import Path
 from queue import Queue
 from typing import Any
 
@@ -30,6 +32,43 @@ from .pipeline import PipelineOptions, PipelineRunner
 # Default reference width for template matching (matches template extraction resolution)
 # Templates were extracted from ~341-344px wide screenshots
 DEFAULT_REFERENCE_WIDTH = 343
+
+
+def _get_config_dir() -> Path:
+    """Get the config directory for saving presets."""
+    if sys.platform == "win32":
+        base = Path.home() / "AppData" / "Roaming"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path.home() / ".config"
+    
+    config_dir = base / "StaminaBuyer"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def _save_targets(targets: list[dict]) -> bool:
+    """Save targets to config file."""
+    try:
+        config_file = _get_config_dir() / "last_targets.json"
+        with open(config_file, "w") as f:
+            json.dump(targets, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _load_targets() -> list[dict]:
+    """Load targets from config file."""
+    try:
+        config_file = _get_config_dir() / "last_targets.json"
+        if config_file.exists():
+            with open(config_file) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
 
 
 class LogCapture:
@@ -318,6 +357,17 @@ class StaminaBuyerGUI(ctk.CTk):
             height=28
         )
         
+        self.load_last_button = ctk.CTkButton(
+            self.config_frame,
+            text="📂 Last",
+            command=self._load_last_targets,
+            width=70,
+            height=28,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("gray10", "gray90")
+        )
+        
         # Targets List (scrollable frame for interactive items)
         self.targets_scroll = ctk.CTkScrollableFrame(
             self.config_frame,
@@ -426,7 +476,8 @@ class StaminaBuyerGUI(ctk.CTk):
         self.window_dropdown.grid(row=0, column=1, padx=(0, 8), in_=row1)
         self.stamina_label.grid(row=0, column=2, padx=(0, 2), in_=row1)
         self.stamina_entry.grid(row=0, column=3, padx=(0, 4), in_=row1)
-        self.add_target_button.grid(row=0, column=4, in_=row1)
+        self.add_target_button.grid(row=0, column=4, padx=(0, 4), in_=row1)
+        self.load_last_button.grid(row=0, column=5, in_=row1)
         
         # Row 2: Targets list
         self.targets_scroll.pack(fill="x", padx=8, pady=(0, 4))
@@ -530,6 +581,16 @@ class StaminaBuyerGUI(ctk.CTk):
         self._update_targets_display()
         self._log("🗑️ Cleared targets")
     
+    def _load_last_targets(self):
+        """Load the last saved targets."""
+        saved = _load_targets()
+        if saved:
+            self.targets = saved
+            self._update_targets_display()
+            self._log(f"📂 Loaded {len(saved)} targets from last session")
+        else:
+            self._log("⚠️ No saved targets found")
+    
     def _update_target_stamina(self, target_name: str, new_stamina: int):
         """Update stamina for a target."""
         for t in self.targets:
@@ -584,6 +645,9 @@ class StaminaBuyerGUI(ctk.CTk):
         
         # Sync any pending edits from the UI
         self._sync_target_values()
+        
+        # Save targets for "Load Last" feature
+        _save_targets(self.targets)
         
         self.is_running = True
         self.cancel_requested = False
