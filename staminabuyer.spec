@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('assets/icons', 'assets/icons')]
+datas = [('assets/icons', 'assets/icons'), ('assets/items.yaml', 'assets')]
 binaries = []
 import sys
 

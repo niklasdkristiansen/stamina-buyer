@@ -161,38 +161,37 @@ jobs:
             dist/checksums.txt
           body: |
             ## 🎮 Stamina Buyer ${{ github.ref_name }}
-            
+
             ### 📦 Downloads
-            
-            - **Windows:** `staminabuyer-windows.exe` - Just double-click to run!
-            - **macOS:** `staminabuyer-macos` - Run `chmod +x staminabuyer-macos` then `./staminabuyer-macos`
-            - **Linux:** `staminabuyer-linux` - Run `chmod +x staminabuyer-linux` then `./staminabuyer-linux`
-            
-            ### ✨ Features
-            
-            - 🎨 Modern GUI - No command-line knowledge needed
-            - ✨ Zero setup - No ADB installation required
-            - 🖥️ Universal - Works with all Android emulators
-            - 🔍 Smart detection - Computer vision powered
-            - 🚀 Multi-instance support
-            - 🧪 Dry-run testing mode
-            
+
+            - **Windows:** `staminabuyer-windows.exe` — just double-click to open the GUI.
+            - **macOS:** `staminabuyer-macos` — `chmod +x staminabuyer-macos`, then right-click → Open the first time (Gatekeeper).
+            - **Linux:** `staminabuyer-linux` — `chmod +x staminabuyer-linux`, then run it.
+
+            ### ✨ Highlights
+
+            - 🖱️ **Double-click to run** — bare executable opens the GUI; no terminal needed.
+            - 📐 **Resolution-agnostic** — anchor-based UI scale calibration + Retina/DPI click correction handle any window size or 2× display.
+            - 🧠 **Never re-buys** — greyed-out cards are detected by HSV saturation and automatically skipped.
+            - 🔁 **Auto-refresh** — refreshes the Black Market until the requested stamina is reached.
+            - 📦 **Customisable catalog** — edit `assets/items.yaml` to prioritise packs or add new ones.
+            - ✨ **Zero setup** — no ADB, no debug bridges.
+
             ### 🚀 Quick Start
-            
-            1. Download the file for your platform
-            2. Make it executable (macOS/Linux: `chmod +x filename`)
-            3. Double-click to open the GUI
-            4. Click "Detect Windows" to find your emulator
-            5. Configure targets and click "Buy Stamina"
-            
+
+            1. Download the file for your platform.
+            2. Make it executable (macOS/Linux: `chmod +x filename`).
+            3. Double-click to open the GUI.
+            4. Click **Detect** to find your emulator window.
+            5. Add a stamina target and click **Start**.
+
             ### 📝 Documentation
-            
-            - [Quick Start Guide](https://github.com/${{ github.repository }}/blob/main/QUICKSTART.md)
-            - [GUI Guide](https://github.com/${{ github.repository }}/blob/main/GUI_GUIDE.md)
-            - [Full README](https://github.com/${{ github.repository }}/blob/main/README.md)
-            
+
+            - [Quick Start Guide](https://github.com/${{ github.repository }}/blob/master/QUICKSTART.md)
+            - [README](https://github.com/${{ github.repository }}/blob/master/README.md)
+
             ### 🔒 Checksums
-            
+
             See `checksums.txt` for SHA256 hashes to verify your download.
           draft: false
           prerelease: false

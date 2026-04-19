@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stamina-buyer"
-version = "0.1.0"
-description = "Headless pipeline that automates Black Market stamina purchases in Evony emulators via ADB and in-memory vision."
+version = "2.3.0"
+description = "Automates Black Market stamina purchases in Evony emulators via direct screen capture and in-memory template matching."
 readme = "README.md"
 authors = [{ name = "Stamina Buyer" }]
 license = { text = "MIT" }
@@ -18,7 +18,7 @@ dependencies = [
     "Pillow>=10.3.0",
     "rich>=13.7.0",
     "PyYAML>=6.0.0",
-    # Screen capture (no ADB required!)
+    # Direct screen capture + OS-level click synthesis (no ADB required).
     "mss>=9.0.0",
     "pyautogui>=0.9.54",
     "pywin32>=306; platform_system=='Windows'",
@@ -36,13 +36,6 @@ dev = [
 build = [
     "pyinstaller>=6.0.0",
     "build>=1.0.0"
-]
-# ADB-free mode: Direct screen capture and mouse automation
-screencapture = [
-    "mss>=9.0.0",
-    "pyautogui>=0.9.54",
-    "pywin32>=306; platform_system=='Windows'",
-    "pyobjc-framework-Quartz>=10.0; platform_system=='Darwin'",
 ]
 
 [project.scripts]

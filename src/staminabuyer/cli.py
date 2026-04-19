@@ -13,7 +13,14 @@ from .config import ResolvedConfiguration, resolve_configuration
 from .pipeline import PipelineOptions, PipelineRunner
 
 app = typer.Typer(
-    help="Automate Evony Black Market stamina purchases across emulators (no ADB required)."
+    help=(
+        "Automate Evony Black Market stamina purchases.\n\n"
+        "Running without a subcommand opens the GUI (recommended). "
+        "Use `run`, `list-windows`, or `gui` for explicit control."
+    ),
+    # Make every subcommand optional so bare `staminabuyer` can launch the GUI
+    # (the typical double-click / `staminabuyer.exe` experience).
+    invoke_without_command=True,
 )
 console = Console()
 
@@ -23,42 +30,57 @@ def _build_runner(
     dry_run: bool,
     max_retries: int,
     reference_width: int | None = None,
+    items_file: Path | None = None,
 ) -> PipelineRunner:
     # Convert 0 to None (disabled)
     ref_width = reference_width if reference_width and reference_width > 0 else None
-    
+
     options = PipelineOptions(
         dry_run=dry_run,
         max_retries=max_retries,
         purchase_delay_seconds=config.purchase_delay_seconds,
         jitter_seconds=config.jitter_seconds,
         reference_width=ref_width,
+        items_file=items_file,
     )
-    
+
     if ref_width:
         console.print(f"[cyan]Using reference width: {ref_width}px (screenshots will be normalized)[/cyan]")
-    
+    if items_file:
+        console.print(f"[cyan]Using item catalog: {items_file}[/cyan]")
+
     return PipelineRunner(options=options, console=console)
 
 
 @app.callback()
-def main_callback() -> None:
-    """Display version banner when invoking CLI."""
+def main_callback(ctx: typer.Context) -> None:
+    """Display a version banner, and launch the GUI when no subcommand is given.
 
+    Running ``staminabuyer`` with no arguments (or double-clicking the bundled
+    executable) falls through to the GUI — that's the intended default UX.
+    Pass an explicit subcommand (``run``, ``list-windows``, ``gui``) to use
+    the CLI instead.
+    """
     console.print(Panel.fit(f"Stamina Buyer v{get_version()}"))
+    if ctx.invoked_subcommand is None:
+        _launch_gui_or_exit()
+
+
+def _launch_gui_or_exit() -> None:
+    """Launch the GUI, or print an actionable error and exit."""
+    try:
+        from .gui import launch_gui
+    except ImportError as exc:
+        console.print("[red]GUI dependencies not installed.[/red]")
+        console.print("Reinstall with: pip install -e .")
+        raise typer.Exit(code=1) from exc
+    launch_gui()
 
 
 @app.command()
 def gui() -> None:
-    """Launch the graphical user interface (recommended for most users)."""
-    try:
-        from .gui import launch_gui
-
-        launch_gui()
-    except ImportError as exc:
-        console.print("[red]GUI dependencies not installed.[/red]")
-        console.print("Install with: pip install customtkinter")
-        raise typer.Exit(code=1) from exc
+    """Launch the graphical user interface (default when no subcommand is given)."""
+    _launch_gui_or_exit()
 
 
 @app.command()
@@ -97,7 +119,7 @@ def list_windows() -> None:
 
     except ImportError as exc:
         console.print("[red]Screen capture dependencies not installed.[/red]")
-        console.print("Install with: pip install -e .[screencapture]")
+        console.print("Reinstall the package with: pip install -e .")
         raise typer.Exit(code=1) from exc
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -126,10 +148,22 @@ def run(
     ),
     max_retries: int = typer.Option(3, min=1, help="Maximum retries when detection fails."),
     reference_width: int | None = typer.Option(
-        343,
+        0,
         "--reference-width",
         "-w",
-        help="Normalize screenshots to this width for reliable matching (default: 343, use 0 to disable).",
+        help=(
+            "Legacy: rescale captured frames to this logical width before matching. "
+            "Anchor-based scale calibration (on by default) makes this unnecessary in "
+            "most setups. Use 0 to disable, or a positive integer to force rescaling."
+        ),
+    ),
+    items_file: Path | None = typer.Option(
+        None,
+        "--items-file",
+        file_okay=True,
+        dir_okay=False,
+        exists=True,
+        help="Custom stamina item catalog (YAML). Defaults to the bundled assets/items.yaml.",
     ),
 ) -> None:
     """Buy stamina from Black Market by detecting the window and clicking automatically.
@@ -148,7 +182,13 @@ def run(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    runner = _build_runner(resolved, dry_run=dry_run, max_retries=max_retries, reference_width=reference_width)
+    runner = _build_runner(
+        resolved,
+        dry_run=dry_run,
+        max_retries=max_retries,
+        reference_width=reference_width,
+        items_file=items_file,
+    )
     results = runner.run(resolved.targets)
 
     failures = [r for r in results if not r.successful]

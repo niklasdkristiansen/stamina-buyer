@@ -7,16 +7,19 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from rich.console import Console
 
 
 def get_assets_path() -> Path:
     """
     Get the correct path to assets, whether running from source or as PyInstaller executable.
-    
+
     Returns:
         Path to the assets directory
     """
@@ -41,6 +44,47 @@ class MatchResult:
     scale: float = 1.0
 
 
+def _within_tolerance(value: float, target: float, relative_tolerance: float) -> bool:
+    """True if ``value`` is within ``relative_tolerance`` (fraction) of ``target``."""
+    if target <= 0:
+        return False
+    return abs(value - target) / target <= relative_tolerance
+
+
+def _iou(a: "MatchResult", b: "MatchResult") -> float:
+    """Intersection-over-Union of two MatchResult bboxes."""
+    ax1, ay1 = a.top_left
+    ax2, ay2 = a.bottom_right
+    bx1, by1 = b.top_left
+    bx2, by2 = b.bottom_right
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area == 0:
+        return 0.0
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    union = area_a + area_b - inter_area
+    return inter_area / union if union > 0 else 0.0
+
+
+def _non_max_suppress(matches: list["MatchResult"], iou_threshold: float) -> list["MatchResult"]:
+    """Greedy NMS: keep highest-scoring match, drop overlaps above the threshold.
+
+    Assumes ``matches`` is already sorted by descending score.
+    """
+    kept: list[MatchResult] = []
+    for candidate in matches:
+        if any(_iou(candidate, existing) > iou_threshold for existing in kept):
+            continue
+        kept.append(candidate)
+    return kept
+
+
 @dataclass(slots=True)
 class TemplateVariant:
     """Stores scaled template data plus feature descriptors for secondary verification."""
@@ -61,16 +105,33 @@ class TemplateLibrary:
         grayscale: bool = True,
         descriptor_ratio: float = 0.75,
         descriptor_min_matches: int = 10,
-        console: Any | None = None,  # Rich Console for logging
-        normalize_resolution: tuple[int, int] | None = None,  # (width, height) to normalize screenshots to
-        template_source_resolution: tuple[int, int] | None = None,  # (width, height) of screenshot templates were extracted from
-        reference_width: int | None = None,  # Normalize screenshots to this width (maintains aspect ratio)
+        console: "Console | None" = None,
+        reference_width: int | None = None,
     ) -> None:
+        """Create a template library.
+
+        Args:
+            template_dir: Directory containing `<icon>.png` files.
+            threshold: Default minimum correlation score for a match.
+            scales: Template scale variants to prepare. Defaults to a dense
+                sweep from 0.40 to 2.00. Callers that do anchor calibration
+                first should pass a narrower band plus rely on `scale_hint`
+                in :meth:`match`.
+            grayscale: Match on grayscale templates (typical, more robust).
+            descriptor_ratio: Lowe's ratio for ORB descriptor filtering.
+            descriptor_min_matches: Minimum good ORB matches required for a
+                template-match candidate to pass secondary verification.
+                Set to 0 to skip the descriptor check entirely.
+            console: Optional Rich console for human-readable progress logs.
+            reference_width: Legacy. If set, captured frames are rescaled to
+                this logical width before matching. Anchor-based calibration
+                (see :meth:`calibrate_scale`) supersedes this for most setups,
+                but the knob is preserved for fixed-size deployments.
+        """
         self.template_dir = template_dir or get_assets_path()
         self.threshold = threshold
-        # Multi-scale matching to handle different emulator window sizes
-        # 0.02 step increments ensure we hit scale-sensitive template sweet spots
-        default_scales = tuple(round(0.4 + i * 0.02, 2) for i in range(81))  # 0.40 to 2.00
+        # 0.02 steps hit scale-sensitive sweet spots across the full supported range.
+        default_scales = tuple(round(0.4 + i * 0.02, 2) for i in range(81))  # 0.40 → 2.00
         self.scales = tuple(sorted({scale for scale in (scales or default_scales) if scale > 0}))
         if not self.scales:
             self.scales = (1.0,)
@@ -81,65 +142,32 @@ class TemplateLibrary:
             raise ValueError("descriptor_min_matches must be non-negative.")
         self.descriptor_ratio = descriptor_ratio
         self.descriptor_min_matches = descriptor_min_matches
-        self.normalize_resolution = normalize_resolution
-        self.template_source_resolution = template_source_resolution
         self.reference_width = reference_width
         self._orb = cv2.ORB_create()
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self._templates: dict[str, dict[float, TemplateVariant]] = {}
         self._logger = logging.getLogger(__name__)
-        self._console = console  # Rich console for verbose output
+        self._console = console
         self.reload()
 
     def reload(self) -> None:
+        """(Re)load every `<name>.png` in the template directory as an icon."""
         self._templates.clear()
-        self._logger.info(f"Loading templates from: {self.template_dir}")
-        
+        self._logger.info("Loading templates from: %s", self.template_dir)
+
         if not self.template_dir.exists():
-            self._logger.warning(f"Template directory does not exist: {self.template_dir}")
+            self._logger.warning("Template directory does not exist: %s", self.template_dir)
             return
-        
+
         template_files = list(self.template_dir.glob("*.png"))
-        self._logger.info(f"Found {len(template_files)} template files")
-        
-        # Calculate dynamic template scaling if both normalization and source resolution are set
-        template_scale_adjustment = 1.0
-        if self.normalize_resolution and self.template_source_resolution:
-            # Templates were extracted from template_source_resolution
-            # We're normalizing screenshots to normalize_resolution
-            # So we need to scale templates to match the normalized resolution
-            source_width, source_height = self.template_source_resolution
-            norm_width, norm_height = self.normalize_resolution
-            
-            # Calculate scale factors for width and height
-            scale_x = norm_width / source_width
-            scale_y = norm_height / source_height
-            
-            # Use the average scale (assuming templates maintain aspect ratio)
-            template_scale_adjustment = (scale_x + scale_y) / 2.0
-            
-            if self._console:
-                self._console.log(
-                    f"[cyan]Dynamic template scaling enabled: "
-                    f"{source_width}×{source_height} → {norm_width}×{norm_height} "
-                    f"(scale: {template_scale_adjustment:.3f}x)[/cyan]"
-                )
-            else:
-                self._logger.info(
-                    f"Dynamic template scaling: {template_scale_adjustment:.3f}x "
-                    f"(from {source_width}×{source_height} to {norm_width}×{norm_height})"
-                )
-        
+        self._logger.info("Found %d template files", len(template_files))
+
         for path in template_files:
             image = cv2.imread(str(path), cv2.IMREAD_COLOR)
             if image is None:
-                self._logger.warning(f"Could not read template: {path}")
+                self._logger.warning("Could not read template: %s", path)
                 continue
-            
-            # Apply dynamic scaling to the template before preparing variants
-            if template_scale_adjustment != 1.0:
-                image = self._scale_template(image, template_scale_adjustment)
-            
+
             prepared = self._prepare_template(image)
             variants: dict[float, TemplateVariant] = {}
             for scale in self.scales:
@@ -156,9 +184,16 @@ class TemplateLibrary:
                 )
             self._templates[path.stem] = variants
             h, w = image.shape[:2]
-            self._logger.debug(f"Loaded template '{path.stem}' ({w}×{h}) with {len(variants)} scale variants")
-        
-        self._logger.info(f"Successfully loaded {len(self._templates)} templates: {list(self._templates.keys())}")
+            self._logger.debug(
+                "Loaded template '%s' (%d×%d) with %d scale variants",
+                path.stem, w, h, len(variants),
+            )
+
+        self._logger.info(
+            "Successfully loaded %d templates: %s",
+            len(self._templates),
+            list(self._templates.keys()),
+        )
 
     def has_template(self, icon_name: str) -> bool:
         """Return True when a template is available for the given icon."""
@@ -166,75 +201,47 @@ class TemplateLibrary:
         return icon_name in self._templates
 
     def _decode_frame(self, frame: bytes) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
-        """
-        Decode frame and optionally normalize to standard resolution.
-        
+        """Decode a PNG/JPEG ``frame`` and optionally rescale to ``reference_width``.
+
         Returns:
-            tuple of (color_frame, prepared_frame, scale_factors)
-            - scale_factors is (x_scale, y_scale) for coordinate conversion
+            ``(color_frame, prepared_frame, (scale_x, scale_y))``.
+            ``scale_x``/``scale_y`` are the ratios needed to map coordinates
+            from the (possibly resized) internal frame back to the original
+            screenshot. They are ``1.0, 1.0`` when no rescale happened.
         """
         array = np.frombuffer(frame, dtype=np.uint8)
         color_frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if color_frame is None:
             raise ValueError("Unable to decode framebuffer for matching.")
-        
+
         orig_height, orig_width = color_frame.shape[:2]
-        
-        # Always log the screenshot resolution for debugging
         if self._console:
             self._console.log(f"[cyan]Screenshot: {orig_width}×{orig_height}[/cyan]")
-        
-        scale_x = 1.0
-        scale_y = 1.0
-        
-        # Reference width normalization (maintains aspect ratio - preferred method)
-        if self.reference_width and orig_width != self.reference_width:
-            # Scale to reference width while maintaining aspect ratio
-            scale_factor = self.reference_width / orig_width
-            target_width = self.reference_width
-            target_height = int(orig_height * scale_factor)
-            
-            # Calculate scale factors for coordinate conversion later
-            scale_x = orig_width / target_width
-            scale_y = orig_height / target_height
-            
-            color_frame = cv2.resize(
-                color_frame,
-                (target_width, target_height),
-                interpolation=cv2.INTER_AREA if scale_factor < 1.0 else cv2.INTER_CUBIC
+
+        if not self.reference_width or orig_width == self.reference_width:
+            return color_frame, self._prepare_frame(color_frame), (1.0, 1.0)
+
+        # Legacy aspect-preserving rescale. Anchor calibration usually obviates
+        # this, but it remains available for fixed-size setups where anchor
+        # detection is expensive or unreliable.
+        scale_factor = self.reference_width / orig_width
+        target_width = self.reference_width
+        target_height = int(orig_height * scale_factor)
+        color_frame = cv2.resize(
+            color_frame,
+            (target_width, target_height),
+            interpolation=cv2.INTER_AREA if scale_factor < 1.0 else cv2.INTER_CUBIC,
+        )
+        if self._console:
+            self._console.log(
+                f"[cyan]Normalized to reference width: {orig_width}×{orig_height} → "
+                f"{target_width}×{target_height} (scale: {scale_factor:.3f}x)[/cyan]"
             )
-            
-            if self._console:
-                self._console.log(
-                    f"[cyan]Normalized to reference width: {orig_width}×{orig_height} → "
-                    f"{target_width}×{target_height} (scale: {scale_factor:.3f}x)[/cyan]"
-                )
-        # Fixed resolution normalization (stretches to exact size)
-        elif self.normalize_resolution:
-            target_width, target_height = self.normalize_resolution
-            
-            # Only normalize if dimensions differ
-            if orig_width != target_width or orig_height != target_height:
-                # Calculate scale factors for coordinate conversion later
-                scale_x = orig_width / target_width
-                scale_y = orig_height / target_height
-                
-                # Resize frame to normalized resolution (maintaining aspect by stretching)
-                # NOTE: This assumes templates were created at the normalized resolution
-                color_frame = cv2.resize(
-                    color_frame, 
-                    (target_width, target_height), 
-                    interpolation=cv2.INTER_AREA
-                )
-                
-                if self._console:
-                    self._console.log(
-                        f"[dim]Normalized {orig_width}x{orig_height} -> "
-                        f"{target_width}x{target_height} (scale: {scale_x:.2f}x, {scale_y:.2f}x)[/dim]"
-                    )
-        
-        prepared = self._prepare_frame(color_frame)
-        return color_frame, prepared, (scale_x, scale_y)
+        return (
+            color_frame,
+            self._prepare_frame(color_frame),
+            (orig_width / target_width, orig_height / target_height),
+        )
 
     def _prepare_template(self, image: np.ndarray) -> np.ndarray:
         if self.grayscale:
@@ -255,18 +262,38 @@ class TemplateLibrary:
         interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
         return cv2.resize(image, (new_width, new_height), interpolation=interpolation)
 
-    def match(self, frame: bytes, icon_names: Iterable[str], threshold: float | None = None) -> list[MatchResult]:
+    def match(
+        self,
+        frame: bytes,
+        icon_names: Iterable[str],
+        threshold: float | None = None,
+        nms_iou_threshold: float = 0.3,
+        scale_hint: float | None = None,
+        scale_tolerance: float = 0.05,
+    ) -> list[MatchResult]:
         """
-        Match templates against a frame.
-        
+        Match templates against a frame and return candidates sorted best-first.
+
         Args:
-            frame: Screenshot bytes (PNG/JPEG)
-            icon_names: Template names to search for
-            threshold: Optional override for match threshold (uses library default if None)
+            frame: Screenshot bytes (PNG/JPEG).
+            icon_names: Template names to search for.
+            threshold: Optional override for match threshold (uses library default if None).
+            nms_iou_threshold: IoU threshold for non-maximum suppression of
+                overlapping matches (same icon at adjacent scales, or different
+                icons landing on the same cell). Set to 1.0 to disable.
+            scale_hint: If provided, only template variants within
+                ``scale_tolerance`` of this scale are evaluated. Used by the
+                pipeline after anchor calibration to avoid a full scale sweep.
+            scale_tolerance: Relative tolerance around ``scale_hint`` (fraction,
+                not absolute). Ignored when ``scale_hint`` is None.
+
+        Returns:
+            Matches sorted by descending score. Overlapping matches (IoU above
+            ``nms_iou_threshold``) are suppressed so ``matches[0]`` is always
+            the single best candidate.
         """
         effective_threshold = threshold if threshold is not None else self.threshold
         color_frame, decoded, (scale_x, scale_y) = self._decode_frame(frame)
-        # Verbose logging removed for cleaner output - best match shown at end
         matches: list[MatchResult] = []
         best_score = 0.0
         best_icon = None
@@ -278,6 +305,10 @@ class TemplateLibrary:
                     self._console.log(f"[yellow]Template '{icon_name}' missing from library.[/yellow]")
                 continue
             for scale, variant in variants.items():
+                if scale_hint is not None and not _within_tolerance(
+                    scale, scale_hint, scale_tolerance
+                ):
+                    continue
                 template = variant.match_image
                 if decoded.shape[0] < template.shape[0] or decoded.shape[1] < template.shape[1]:
                     continue
@@ -302,7 +333,7 @@ class TemplateLibrary:
                                 scale,
                             )
                             continue
-                    
+
                     # Convert coordinates back to original resolution if we normalized
                     if scale_x != 1.0 or scale_y != 1.0:
                         top_left = (
@@ -313,7 +344,7 @@ class TemplateLibrary:
                             int(bottom_right[0] * scale_x),
                             int(bottom_right[1] * scale_y)
                         )
-                    
+
                     matches.append(
                         MatchResult(
                             icon=icon_name,
@@ -348,7 +379,68 @@ class TemplateLibrary:
         elif not matches:
             if self._console:
                 self._console.log("[yellow]❌ No templates matched at all[/yellow]")
+
+        matches.sort(key=lambda m: m.score, reverse=True)
+        if nms_iou_threshold < 1.0 and len(matches) > 1:
+            matches = _non_max_suppress(matches, nms_iou_threshold)
         return matches
+
+    def calibrate_scale(
+        self,
+        frame: bytes,
+        anchor_icons: Sequence[str],
+        min_score: float = 0.6,
+    ) -> MatchResult | None:
+        """Find the best-scoring anchor match in ``frame`` to calibrate scale.
+
+        The returned match's ``scale`` is the factor the UI is rendered at
+        relative to the stored templates. Feed it back into :meth:`match` via
+        ``scale_hint`` to match subsequent icons efficiently and without a
+        wide multi-scale sweep.
+
+        Args:
+            frame: Screenshot bytes.
+            anchor_icons: Candidate anchor templates (first match wins among
+                those meeting ``min_score``). Typical picks are stable UI
+                chrome like the "refresh" button that only appears on the
+                target screen.
+            min_score: Minimum correlation score required to trust the match.
+
+        Returns:
+            The best anchor MatchResult, or ``None`` if no anchor was
+            confident enough. Callers should treat ``None`` as "probably on
+            the wrong screen".
+        """
+        # We intentionally do NOT pass scale_hint here; this is the calibration step.
+        matches = self.match(frame, anchor_icons, threshold=min_score)
+        if not matches:
+            return None
+        return matches[0]
+
+    def mean_saturation(self, frame: bytes, match: MatchResult) -> float:
+        """Return the mean HSV saturation of the match's ROI in the decoded frame.
+
+        Used for detecting 'greyed out' states (bought items, disabled buttons)
+        without needing a separate per-state template. Regular stamina cards
+        measure ~145, purchased/desaturated ones ~35, so a threshold around
+        80 cleanly separates the two.
+        """
+        color_frame, _, (scale_x, scale_y) = self._decode_frame(frame)
+        # match coordinates were returned in original-frame space, so convert
+        # them back into the decoded frame's space before indexing.
+        x1 = int(match.top_left[0] / scale_x) if scale_x else match.top_left[0]
+        y1 = int(match.top_left[1] / scale_y) if scale_y else match.top_left[1]
+        x2 = int(match.bottom_right[0] / scale_x) if scale_x else match.bottom_right[0]
+        y2 = int(match.bottom_right[1] / scale_y) if scale_y else match.bottom_right[1]
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(color_frame.shape[1], x2)
+        y2 = min(color_frame.shape[0], y2)
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+        roi = color_frame[y1:y2, x1:x2]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        return float(np.mean(hsv[..., 1]))
 
     def _passes_descriptor_check(
         self,

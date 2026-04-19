@@ -1,0 +1,16 @@
+# Stamina items the pipeline will try to purchase, listed highest-priority first.
+#
+# Schema:
+#   template:    name of the PNG (without extension) in assets/icons/
+#   amount:      how much stamina this item grants (used for "purchased"
+#                accounting vs. the user's target)
+#
+# Bought/greyed-out state is detected automatically from HSV saturation
+# of the match region (see PipelineOptions.bought_saturation_threshold),
+# so no separate `_bought` templates are needed.
+
+items:
+  - template: stamina_10
+    amount: 500     # 10-pack × 50 stamina each
+  - template: stamina_1
+    amount: 50      # 1-pack × 50 stamina

@@ -29,9 +29,10 @@ from rich.console import Console
 from .config import EmulatorTarget
 from .pipeline import PipelineOptions, PipelineRunner
 
-# Default reference width for template matching (matches template extraction resolution)
-# Templates were extracted from ~341-344px wide screenshots
-DEFAULT_REFERENCE_WIDTH = 343
+# Anchor-based scale calibration supersedes the legacy reference-width
+# rescale, so the GUI leaves it disabled. Kept as a sentinel here in case a
+# future preference screen wants to expose it for fixed-size deployments.
+DEFAULT_REFERENCE_WIDTH: int | None = None
 
 
 def _get_config_dir() -> Path:

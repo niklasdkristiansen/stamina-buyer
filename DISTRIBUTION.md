@@ -85,48 +85,40 @@ Creates a containerized version that works anywhere Docker runs.
 
 **Cons:**
 - Requires Docker installation
-- More complex ADB passthrough
+- Can't reach the host's display server to read the emulator window — useful for CI only
 - Larger download size
 
 #### Dockerfile
 
 Create `Dockerfile`:
 
+> ⚠️ Docker is **not** a supported runtime for real use. Stamina Buyer
+> needs direct access to the host's display server to read the emulator
+> window and synthesise clicks, which is awkward to expose into a
+> container. The snippet below is only useful for headless CI checks
+> (e.g. running `pytest` or `staminabuyer --help`).
+
 ```dockerfile
 FROM python:3.12-slim
 
-# Install ADB
-RUN apt-get update && \
-    apt-get install -y android-tools-adb && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install OpenCV dependencies
+# OpenCV runtime libs
 RUN apt-get update && \
     apt-get install -y libgl1-mesa-glx libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy application
 WORKDIR /app
 COPY . .
+RUN pip install --no-cache-dir -e .[dev]
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
-
-# Entry point
 ENTRYPOINT ["staminabuyer"]
 CMD ["--help"]
 ```
 
-#### Build and Use
+#### Build and Use (CI only)
 
 ```bash
-# Build image
 docker build -t staminabuyer:latest .
-
-# Run
-docker run --rm \
-  --network=host \
-  staminabuyer run --target "emulator:100"
+docker run --rm staminabuyer --help
 ```
 
 ---
@@ -261,7 +253,7 @@ jobs:
 ### For Private/Internal Use:
 1. **Build locally** with PyInstaller
 2. **Share via file server** or internal distribution system
-3. **Include ADB setup instructions**
+3. **Point users at [QUICKSTART.md](QUICKSTART.md)** for `list-windows` + `run` usage
 
 ---
 
@@ -270,12 +262,11 @@ jobs:
 Before distributing, ensure:
 
 - ✅ All tests pass (`pytest tests/`)
-- ✅ Templates are included in build
+- ✅ Templates (`assets/icons/*.png`) and `assets/items.yaml` are included in the bundle
 - ✅ Executable runs without Python installed
-- ✅ ADB requirements documented
 - ✅ Platform-specific instructions provided
 - ✅ Version number is correct
-- ✅ README includes quick-start guide
+- ✅ README and QUICKSTART reflect the current CLI
 - ✅ License file included
 
 ---
@@ -321,14 +312,14 @@ sudo apt-get install libgl1-mesa-glx libglib2.0-0
 
 ### Requirements
 
-- ADB installed and in PATH
-- Android emulator running Evony
+- Android emulator running Evony, window visible (not minimized)
 
 ### Quick Start
 
 1. Download the executable for your platform
 2. Make executable (macOS/Linux): `chmod +x staminabuyer`
-3. Run: `./staminabuyer run --target "YourEmulator:100"`
+3. Find the emulator window: `./staminabuyer list-windows`
+4. Run: `./staminabuyer run --target "YourEmulator:100"`
 
 ### Checksums
 

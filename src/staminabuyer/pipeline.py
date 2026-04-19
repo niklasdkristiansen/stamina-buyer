@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import enum
 import random
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -16,19 +19,120 @@ from .emulator.screen_capture import ScreenCaptureClient
 from .vision.matcher import MatchResult, TemplateLibrary
 
 
+class PurchaseState(enum.Enum):
+    """States the purchase loop can be in.
+
+    Transitions (on success):
+        FOCUS_WINDOW → FIND_ITEM → TAP_ITEM → WAIT_FOR_CONFIRM
+                   → CONFIRM → RECORD_PURCHASE → FIND_ITEM (next round)
+                                             → DONE (target reached)
+
+    CONFIRM can also transition back to FIND_ITEM (no dialog, item was
+    already bought). FIND_ITEM can transition directly to DONE when the
+    target is already satisfied before the first purchase. Any state can
+    raise ``CancelledError``, ending the loop.
+    """
+
+    FOCUS_WINDOW = "focus_window"
+    FIND_ITEM = "find_item"
+    TAP_ITEM = "tap_item"
+    WAIT_FOR_CONFIRM = "wait_for_confirm"
+    CONFIRM = "confirm"
+    RECORD_PURCHASE = "record_purchase"
+    DONE = "done"
+
+
 @dataclass
+class PurchaseContext:
+    """Mutable state threaded through the purchase state machine."""
+
+    target: EmulatorTarget
+    purchased: int = 0
+    purchase_count: int = 0
+    pending_item: "StaminaItem | None" = None
+    pending_match: MatchResult | None = None
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.target.stamina - self.purchased)
+
+    @property
+    def is_satisfied(self) -> bool:
+        return self.purchased >= self.target.stamina
+
+
+@dataclass(slots=True)
 class StaminaItem:
-    """Represents a stamina item available in the Black Market."""
+    """A stamina item available in the Black Market.
+
+    ``template_name`` must reference a PNG in the assets/icons folder (without
+    extension). ``stamina_amount`` is how much stamina is credited toward the
+    target when this item is successfully purchased.
+
+    Bought/greyed-out items are skipped via ROI saturation — no per-state
+    template required.
+    """
+
     template_name: str
     stamina_amount: int
-    bought_template_name: str | None = None  # Template for already-purchased version
-    
-    
-# Available stamina items (prioritized by efficiency)
-STAMINA_ITEMS = [
-    StaminaItem("stamina_10", 500, "stamina_10_bought"),  # 10 packs × 50 = 500 stamina
-    StaminaItem("stamina_1", 50, "stamina_1_bought"),    # 1 pack × 50 = 50 stamina
-]
+
+
+#: Default catalog, prioritized by efficiency. Callers can override by
+#: providing a YAML file via :func:`load_stamina_items` or the CLI's
+#: ``--items-file`` option. The runtime catalog lives on
+#: :attr:`PipelineRunner._items`, not at module scope, so per-run overrides
+#: never leak across runners.
+DEFAULT_STAMINA_ITEMS: tuple[StaminaItem, ...] = (
+    StaminaItem("stamina_10", 500),  # 10 packs × 50 = 500 stamina
+    StaminaItem("stamina_1", 50),    # 1 pack × 50 = 50 stamina
+)
+
+
+def _default_items_file() -> Path:
+    """Return the path to the bundled items.yaml, whether running from source or PyInstaller."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "assets" / "items.yaml"
+    # pipeline.py lives at src/staminabuyer/pipeline.py
+    return Path(__file__).resolve().parent.parent.parent / "assets" / "items.yaml"
+
+
+def load_stamina_items(path: Path | None = None) -> list[StaminaItem]:
+    """Load the stamina item catalog from YAML.
+
+    Falls back to :data:`DEFAULT_STAMINA_ITEMS` if the file does not exist,
+    so the pipeline still works when the bundled YAML is stripped from a
+    minimal build.
+
+    The expected schema is::
+
+        items:
+          - template: stamina_10
+            amount: 500
+          - template: stamina_1
+            amount: 50
+    """
+    resolved = path or _default_items_file()
+    if not resolved.exists():
+        return list(DEFAULT_STAMINA_ITEMS)
+
+    payload = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
+    raw_items = payload.get("items", [])
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError(f"{resolved} must contain a non-empty 'items:' list.")
+
+    catalog: list[StaminaItem] = []
+    for idx, entry in enumerate(raw_items):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{resolved}: items[{idx}] must be a mapping, got {type(entry).__name__}")
+        try:
+            template_name = entry["template"]
+            amount = int(entry["amount"])
+        except KeyError as exc:
+            raise ValueError(f"{resolved}: items[{idx}] missing required field {exc}") from exc
+        if amount <= 0:
+            raise ValueError(f"{resolved}: items[{idx}] 'amount' must be positive, got {amount}")
+        catalog.append(StaminaItem(template_name=str(template_name), stamina_amount=amount))
+    return catalog
 
 
 @dataclass(slots=True)
@@ -45,14 +149,26 @@ class PipelineOptions:
     confirm_icon_name: str = "to_confirm"
     gem_button_vertical_ratio: float = 0.9
     template_threshold: float = 0.70  # Lowered to catch refresh button variants (free vs paid)
-    bought_threshold: float = 0.5  # Lower threshold for detecting "already bought" items
     descriptor_min_matches: int = 10  # Standard feature matching (15 was too strict!)
-    # With reference_width normalization, we only need scales near 1.0
-    template_scales: tuple[float, ...] = (0.90, 0.95, 1.00, 1.05, 1.10)
-    normalize_resolution: tuple[int, int] | None = None  # Let multi-scale handle resolution differences
-    template_source_resolution: tuple[int, int] | None = None  # Not using dynamic scaling
-    reference_width: int | None = None  # Normalize screenshots to this width (maintains aspect ratio, more robust)
-    save_debug_screenshots: bool = False  # Save screenshots when matching fails
+    # Mean HSV saturation below this is treated as "already purchased" (the
+    # Evony UI desaturates bought cards). Regular cards measure ~145, bought
+    # ones ~35, so 80 leaves plenty of margin either way.
+    bought_saturation_threshold: float = 80.0
+    # Scale sweep used when we don't yet know the UI's scale. Once an anchor
+    # is located, subsequent matches are restricted to a tight tolerance band
+    # around the calibrated scale (see ``scale_tolerance``), which is both
+    # faster and more robust than scanning the full range every frame.
+    template_scales: tuple[float, ...] = (
+        0.50, 0.60, 0.70, 0.80, 0.90, 0.95,
+        1.00, 1.05, 1.10, 1.25, 1.50, 1.75, 2.00,
+    )
+    reference_width: int | None = None  # Legacy aspect-preserving rescale; anchor calibration supersedes this.
+    save_debug_screenshots: bool = False
+    items_file: Path | None = None  # Optional path to items.yaml; None = bundled default.
+    # Anchor-based scale calibration:
+    anchor_icons: tuple[str, ...] = ("refresh",)  # Icons used to detect the UI's current scale.
+    anchor_min_score: float = 0.6  # Minimum anchor score to trust calibration.
+    scale_tolerance: float = 0.10  # Fractional band around the calibrated scale for item matches.
 
 
 @dataclass(slots=True)
@@ -83,12 +199,21 @@ class PipelineRunner:
         template_library: TemplateLibrary | None = None,
         progress_callback: Callable[[str, int], None] | None = None,  # (target_name, purchased_amount)
         cancel_callback: Callable[[], bool] | None = None,  # Returns True if cancelled
+        items: Sequence[StaminaItem] | None = None,
     ) -> None:
         self.options = options
         self.console = console or Console()
         self._client_factory = client_factory or (lambda window_title: ScreenCaptureClient(window_title=window_title))
         self._progress_callback = progress_callback
         self._cancel_callback = cancel_callback
+        # Items: explicit > options.items_file > bundled default.
+        if items is not None:
+            self._items: list[StaminaItem] = list(items)
+        else:
+            self._items = load_stamina_items(options.items_file)
+        # Most-recently-calibrated UI scale, reused across item/button matches
+        # within a single purchase attempt. ``None`` means not yet calibrated.
+        self._calibrated_scale: float | None = None
         threshold = options.template_threshold
         self._templates = template_library or TemplateLibrary(
             options.template_dir,
@@ -96,11 +221,32 @@ class PipelineRunner:
             scales=options.template_scales,
             grayscale=True,
             descriptor_min_matches=options.descriptor_min_matches,
-            console=self.console,  # Pass console for verbose logging
-            normalize_resolution=options.normalize_resolution,
-            template_source_resolution=options.template_source_resolution,
+            console=self.console,
             reference_width=options.reference_width,
         )
+
+    def _calibrate_from_frame(self, frame: bytes) -> float | None:
+        """Detect the UI's current scale from ``frame`` using the configured anchor.
+
+        Updates ``self._calibrated_scale`` in place (only when a confident
+        anchor is found) and returns the new value. Returns ``None`` and
+        leaves the previous scale intact when the anchor can't be located —
+        meaning "probably not on the expected screen".
+        """
+        anchor_match = self._templates.calibrate_scale(
+            frame,
+            anchor_icons=self.options.anchor_icons,
+            min_score=self.options.anchor_min_score,
+        )
+        if anchor_match is None:
+            return None
+        if self._calibrated_scale is None or abs(anchor_match.scale - self._calibrated_scale) > 0.01:
+            self.console.log(
+                f"[dim]Scale calibrated from anchor '{anchor_match.icon}': "
+                f"scale={anchor_match.scale:.2f} score={anchor_match.score:.3f}[/dim]"
+            )
+        self._calibrated_scale = anchor_match.scale
+        return anchor_match.scale
 
     def _check_cancelled(self) -> None:
         """Check if operation was cancelled and raise if so."""
@@ -138,72 +284,120 @@ class PipelineRunner:
 
         return PipelineResult(name=target.name, requested=target.stamina, purchased=purchased, errors=errors)
 
-    def _execute_purchase_loop(self, client: ScreenCaptureClient, target: EmulatorTarget) -> int:
-        # Focus the window first to ensure it's visible and on top
+    def _execute_purchase_loop(
+        self, client: ScreenCaptureClient, target: EmulatorTarget
+    ) -> int:
+        """Drive the purchase state machine until the target is satisfied or cancelled."""
+        ctx = PurchaseContext(target=target)
+        state = PurchaseState.FOCUS_WINDOW
+
+        handlers: dict[PurchaseState, Callable[[ScreenCaptureClient, PurchaseContext], PurchaseState]] = {
+            PurchaseState.FOCUS_WINDOW: self._state_focus_window,
+            PurchaseState.FIND_ITEM: self._state_find_item,
+            PurchaseState.TAP_ITEM: self._state_tap_item,
+            PurchaseState.WAIT_FOR_CONFIRM: self._state_wait_for_confirm,
+            PurchaseState.CONFIRM: self._state_confirm,
+            PurchaseState.RECORD_PURCHASE: self._state_record_purchase,
+        }
+
+        while state is not PurchaseState.DONE:
+            self._check_cancelled()
+            try:
+                handler = handlers[state]
+            except KeyError as exc:
+                raise RuntimeError(f"No handler registered for state {state}") from exc
+            state = handler(client, ctx)
+
+        return ctx.purchased
+
+    # --- State handlers --------------------------------------------------
+    # Each returns the next PurchaseState. They may raise CancelledError
+    # or RuntimeError; the loop above handles the former and propagates
+    # the latter out to the caller.
+
+    def _state_focus_window(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
         self.console.log("Bringing window to foreground...")
         client.focus_window()
-        """Buy stamina packs by matching templates and tapping confirm dialogs."""
+        return PurchaseState.FIND_ITEM
 
-        purchased = 0
-        purchase_count = 0
-        
-        # Keep buying until we reach the target
-        while purchased < target.stamina:
-            self._check_cancelled()
-            
-            purchase_count += 1
-            remaining = target.stamina - purchased
-            
+    def _state_find_item(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
+        if ctx.is_satisfied:
+            return PurchaseState.DONE
+
+        ctx.purchase_count += 1
+        self.console.log(
+            f"Purchase #{ctx.purchase_count} for '{ctx.target.name}' "
+            f"(have {ctx.purchased}/{ctx.target.stamina} stamina, need {ctx.remaining} more)"
+        )
+
+        pack_match, stamina_item = self._find_stamina_with_refresh(client)
+        ctx.pending_match = pack_match
+        ctx.pending_item = stamina_item
+        return PurchaseState.TAP_ITEM
+
+    def _state_tap_item(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
+        assert ctx.pending_match is not None, "TAP_ITEM requires a pending match"
+        self._tap_gem_button(client, ctx.pending_match)
+        return PurchaseState.WAIT_FOR_CONFIRM
+
+    def _state_wait_for_confirm(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
+        delay = self.options.post_click_delay_seconds
+        self.console.log(f"[dim]Waiting {delay}s for confirm dialog...[/dim]")
+        time.sleep(delay)
+        return PurchaseState.CONFIRM
+
+    def _state_confirm(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
+        try:
+            confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
+        except RuntimeError:
+            # No dialog appeared — the item was already owned, or the tap missed.
+            # Fall back to the next find/refresh cycle after a short settle.
             self.console.log(
-                f"Purchase #{purchase_count} for '{target.name}' "
-                f"(have {purchased}/{target.stamina} stamina, need {remaining} more)"
+                "[yellow]⚠️ Confirm dialog not found — item may already be purchased. "
+                "Continuing...[/yellow]"
             )
-            
-            # Try to find any available stamina item, refresh if needed
-            pack_match, stamina_item = self._find_stamina_with_refresh(client)
-            
-            # Click the stamina item
-            self._tap_gem_button(client, pack_match)
-            
-            # Wait for confirm dialog to appear
-            delay = self.options.post_click_delay_seconds
-            self.console.log(f"[dim]Waiting {delay}s for confirm dialog...[/dim]")
-            time.sleep(delay)
+            time.sleep(self.options.post_purchase_delay_seconds)
+            ctx.pending_match = None
+            ctx.pending_item = None
+            return PurchaseState.FIND_ITEM
 
-            # Find and click confirm button - if not found, skip and try again
-            try:
-                confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
-                self._tap_center(client, confirm_match)
-            except RuntimeError:
-                self.console.log(
-                    "[yellow]⚠️ Confirm dialog not found - item may already be purchased. "
-                    "Continuing...[/yellow]"
-                )
-                # Wait a moment then continue to find next item
-                time.sleep(self.options.post_purchase_delay_seconds)
-                continue
+        self._tap_center(client, confirm_match)
+        return PurchaseState.RECORD_PURCHASE
 
-            # Update purchased amount
-            purchased += stamina_item.stamina_amount
-            self.console.log(
-                f"✅ Purchased {stamina_item.stamina_amount} stamina. "
-                f"Total: {purchased}/{target.stamina}"
-            )
-            
-            # Notify progress callback
-            if self._progress_callback:
-                self._progress_callback(target.name, purchased)
-            
-            # Check if we're done
-            if purchased >= target.stamina:
-                break
-            
-            # Wait for purchase to complete and UI to update before next purchase
-            delay = self.options.post_purchase_delay_seconds
-            self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
-            time.sleep(delay)
+    def _state_record_purchase(
+        self, client: ScreenCaptureClient, ctx: PurchaseContext
+    ) -> PurchaseState:
+        assert ctx.pending_item is not None, "RECORD_PURCHASE requires a pending item"
 
-        return purchased
+        ctx.purchased += ctx.pending_item.stamina_amount
+        self.console.log(
+            f"✅ Purchased {ctx.pending_item.stamina_amount} stamina. "
+            f"Total: {ctx.purchased}/{ctx.target.stamina}"
+        )
+
+        if self._progress_callback:
+            self._progress_callback(ctx.target.name, ctx.purchased)
+
+        ctx.pending_match = None
+        ctx.pending_item = None
+
+        if ctx.is_satisfied:
+            return PurchaseState.DONE
+
+        delay = self.options.post_purchase_delay_seconds
+        self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
+        time.sleep(delay)
+        return PurchaseState.FIND_ITEM
 
     def _render_summary(self, results: Sequence[PipelineResult]) -> None:
         table = Table(title="Stamina Buyer Run Summary")
@@ -232,120 +426,142 @@ class PipelineRunner:
         if delay > 0:
             time.sleep(delay)
 
-    def _find_stamina_with_refresh(self, client: ScreenCaptureClient) -> tuple[MatchResult, StaminaItem]:
-        """
-        Try to find any stamina item. If not found, refresh the Black Market and retry.
-        
-        Also checks for "bought" versions and skips them (they can't be purchased again).
-        
-        Returns:
-            Tuple of (MatchResult, StaminaItem) for the found stamina
-            
+    def _find_stamina_with_refresh(
+        self, client: ScreenCaptureClient
+    ) -> tuple[MatchResult, StaminaItem]:
+        """Find the best available (un-purchased) stamina item, refreshing if needed.
+
+        Composes the smaller helpers below: capture & calibrate → score every
+        item → pick the highest-scoring *available* one (ignoring greyed-out
+        cards by saturation) → refresh and retry if nothing usable was found.
+
         Raises:
-            RuntimeError: If stamina cannot be found after refreshing
+            RuntimeError: No available stamina item after exhausting refreshes.
         """
         for refresh_attempt in range(self.options.max_refreshes + 1):
             self._check_cancelled()
-            
+
             frame = client.screencap()
-            
-            # Match all templates (regular and bought) with low threshold to get scores
-            all_templates = []
-            for item in STAMINA_ITEMS:
-                all_templates.append(item.template_name)
-                if item.bought_template_name:
-                    all_templates.append(item.bought_template_name)
-            
-            # Get BEST scores for all templates (use low threshold to see everything)
-            scores: dict[str, tuple[float, MatchResult | None]] = {}
-            for template_name in all_templates:
-                matches = self._templates.match(frame, [template_name], threshold=0.3)
-                if matches:
-                    # Take the BEST match (highest score), not just the first one
-                    best_match = max(matches, key=lambda m: m.score)
-                    scores[template_name] = (best_match.score, best_match)
-                else:
-                    scores[template_name] = (0.0, None)
-            
-            # Log all scores for debugging
-            self.console.log("[dim]Template scores: " + ", ".join(
-                f"{k}={v[0]:.3f}" for k, v in scores.items()
-            ) + "[/dim]")
-            
-            # Determine which item type is on screen by comparing regular scores
-            stamina_10_score = scores.get("stamina_10", (0.0, None))[0]
-            stamina_1_score = scores.get("stamina_1", (0.0, None))[0]
-            
-            # Sort items by their regular score (highest first) to check the best match first
-            sorted_items = sorted(
-                STAMINA_ITEMS,
-                key=lambda item: scores.get(item.template_name, (0.0, None))[0],
-                reverse=True
-            )
-            
-            self.console.log(
-                f"[dim]Item detection: stamina_10={stamina_10_score:.3f}, stamina_1={stamina_1_score:.3f} "
-                f"→ checking {sorted_items[0].template_name} first[/dim]"
-            )
-            
-            # Check items in order of best match
-            for stamina_item in sorted_items:
-                regular_score, regular_match = scores.get(stamina_item.template_name, (0.0, None))
-                bought_score, _ = scores.get(stamina_item.bought_template_name, (0.0, None)) if stamina_item.bought_template_name else (0.0, None)
-                
-                # Must have a decent regular match
-                if regular_score < self.options.template_threshold:
-                    continue
-                
-                # Check if bought scores higher than regular
-                if bought_score > regular_score:
-                    self.console.log(
-                        f"[yellow]Skipping '{stamina_item.template_name}' - already purchased "
-                        f"(bought: {bought_score:.3f} > regular: {regular_score:.3f})[/yellow]"
-                    )
-                    continue
-                
-                # This item is available!
-                self.console.log(
-                    f"Found '{stamina_item.template_name}' ({stamina_item.stamina_amount} stamina) "
-                    f"with score {regular_score:.3f} (bought: {bought_score:.3f})"
-                )
-                return regular_match, stamina_item
-            
-            # No stamina found
-            if refresh_attempt < self.options.max_refreshes:
-                # Try to refresh
-                self.console.log(
-                    f"No stamina items found. Refreshing Black Market... (refresh #{refresh_attempt + 1})"
-                )
-                
-                try:
-                    refresh_match = self._match_with_retry(client, self.options.refresh_button_icon)
-                    self._tap_center(client, refresh_match)
-                    
-                    # Wait for refresh to complete
-                    refresh_delay = 1.0
-                    self.console.log(f"[dim]Waiting {refresh_delay}s for refresh...[/dim]")
-                    time.sleep(refresh_delay)
-                except RuntimeError:
-                    self.console.log("[yellow]Refresh button not found, continuing...[/yellow]")
-            else:
-                # Out of refresh attempts
+            scale_hint = self._calibrate_from_frame(frame)
+            scores = self._score_items(frame, scale_hint=scale_hint)
+
+            selection = self._select_available_item(frame, scores)
+            if selection is not None:
+                return selection
+
+            if refresh_attempt >= self.options.max_refreshes:
                 if self.options.save_debug_screenshots:
                     self._save_debug_screenshot(frame, "stamina")
                 raise RuntimeError(
-                    f"Failed to locate any stamina items after {self.options.max_refreshes} refresh attempts."
+                    f"Failed to locate any stamina items after "
+                    f"{self.options.max_refreshes} refresh attempts."
                 )
-        
+
+            self.console.log(
+                f"No stamina items found. Refreshing Black Market... "
+                f"(refresh #{refresh_attempt + 1})"
+            )
+            self._refresh_market(client)
+
         raise RuntimeError("Failed to locate any stamina items")
-    
+
+    def _score_items(
+        self, frame: bytes, scale_hint: float | None
+    ) -> dict[str, tuple[float, MatchResult | None]]:
+        """Return ``{template_name: (best_score, best_match)}`` for every item.
+
+        Uses a low acceptance threshold so callers can see and log scores for
+        items that narrowly missed, rather than silently getting empty lists.
+        """
+        scores: dict[str, tuple[float, MatchResult | None]] = {}
+        for item in self._items:
+            matches = self._templates.match(
+                frame,
+                [item.template_name],
+                threshold=0.3,
+                scale_hint=scale_hint,
+                scale_tolerance=self.options.scale_tolerance,
+            )
+            best = matches[0] if matches else None
+            scores[item.template_name] = (best.score if best else 0.0, best)
+
+        self.console.log(
+            "[dim]Template scores: "
+            + ", ".join(f"{k}={v[0]:.3f}" for k, v in scores.items())
+            + "[/dim]"
+        )
+        return scores
+
+    def _select_available_item(
+        self,
+        frame: bytes,
+        scores: dict[str, tuple[float, MatchResult | None]],
+    ) -> tuple[MatchResult, StaminaItem] | None:
+        """Pick the highest-scoring item that clears the threshold AND is not greyed out.
+
+        Returns ``None`` when every item is either below threshold or
+        desaturated (i.e., already purchased).
+        """
+        sorted_items = sorted(
+            self._items,
+            key=lambda it: scores[it.template_name][0],
+            reverse=True,
+        )
+
+        for item in sorted_items:
+            score, match = scores[item.template_name]
+            if match is None or score < self.options.template_threshold:
+                continue
+
+            saturation = self._templates.mean_saturation(frame, match)
+            if saturation < self.options.bought_saturation_threshold:
+                self.console.log(
+                    f"[yellow]Skipping '{item.template_name}' — already purchased "
+                    f"(saturation {saturation:.1f} < {self.options.bought_saturation_threshold:.1f})[/yellow]"
+                )
+                continue
+
+            self.console.log(
+                f"Found '{item.template_name}' ({item.stamina_amount} stamina) "
+                f"score={score:.3f} saturation={saturation:.1f}"
+            )
+            return match, item
+
+        return None
+
+    def _refresh_market(self, client: ScreenCaptureClient) -> None:
+        """Tap the refresh button if we can find it, otherwise log and move on.
+
+        Never raises — a missing refresh button shouldn't halt the whole run;
+        the outer loop will just try another frame.
+        """
+        try:
+            refresh_match = self._match_with_retry(client, self.options.refresh_button_icon)
+        except RuntimeError:
+            self.console.log("[yellow]Refresh button not found, continuing...[/yellow]")
+            return
+
+        self._tap_center(client, refresh_match)
+        refresh_delay = 1.0
+        self.console.log(f"[dim]Waiting {refresh_delay}s for refresh...[/dim]")
+        time.sleep(refresh_delay)
+
     def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
         if not self._templates.has_template(icon_name):
             raise RuntimeError(f"Template '{icon_name}' is not available in assets/icons.")
 
         for attempt in range(1, self.options.max_retries + 1):
             frame = client.screencap()
-            matches = self._templates.match(frame, [icon_name])
+
+            # Refresh calibration each retry so zoom/resize mid-run is tolerated.
+            self._calibrate_from_frame(frame)
+
+            matches = self._templates.match(
+                frame,
+                [icon_name],
+                scale_hint=self._calibrated_scale,
+                scale_tolerance=self.options.scale_tolerance,
+            )
             if matches:
                 match = matches[0]
                 self.console.log(
@@ -358,11 +574,11 @@ class PipelineRunner:
                 f"Attempt {attempt}/{self.options.max_retries}: "
                 f"no match for '{icon_name}', retrying after delay."
             )
-            
+
             # Save debug screenshot if enabled and this is the last attempt
             if self.options.save_debug_screenshots and attempt == self.options.max_retries:
                 self._save_debug_screenshot(frame, icon_name)
-            
+
             self._sleep_with_jitter()
 
         raise RuntimeError(f"Failed to locate '{icon_name}' after {self.options.max_retries} retries.")
@@ -383,7 +599,7 @@ class PipelineRunner:
         tap_y = min(match.bottom_right[1] - 1, max(match.top_left[1], tap_y))
         self.console.log(f"Tapping coordinates ({tap_x}, {tap_y}).")
         client.tap(tap_x, tap_y)
-    
+
     def _save_debug_screenshot(self, frame: bytes, icon_name: str) -> None:
         """Save a debug screenshot when template matching fails."""
         try:
@@ -391,21 +607,21 @@ class PipelineRunner:
 
             import cv2
             import numpy as np
-            
+
             # Decode the frame
             array = np.frombuffer(frame, dtype=np.uint8)
             image = cv2.imdecode(array, cv2.IMREAD_COLOR)
-            
+
             if image is not None:
                 # Create debug directory if it doesn't exist
                 debug_dir = Path.cwd() / "debug_screenshots"
                 debug_dir.mkdir(exist_ok=True)
-                
+
                 # Save with timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = debug_dir / f"failed_{icon_name}_{timestamp}.png"
                 cv2.imwrite(str(filename), image)
-                
+
                 self.console.log(f"[dim]Debug screenshot saved: {filename}[/dim]")
         except Exception as e:
             self.console.log(f"[dim]Could not save debug screenshot: {e}[/dim]")

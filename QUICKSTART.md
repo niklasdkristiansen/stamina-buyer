@@ -1,200 +1,168 @@
-# Quick Start Guide
+# Quick Start
 
-**Stamina Buyer** automates purchasing stamina from the Black Market in Evony: The King's Return.
+**Stamina Buyer** automates purchasing stamina from the Black Market in
+Evony: The King's Return. No ADB, no debug bridges, no config files.
 
-**✨ No ADB, no configuration - just run it!**
+---
 
-## ⚡ 3-Minute Setup
+## 1. Prerequisites
 
-### 1. Prerequisites
+- Any Android emulator running Evony (BlueStacks, LDPlayer, NoxPlayer, MEmu, MuMu, …)
+- Emulator window must be **visible** — not minimized, not fully covered by another window
 
-**Required:**
-- Android emulator (BlueStacks, LDPlayer, NoxPlayer, MEmu, MuMu, etc.)
-- Evony: The King's Return running on emulator
-- Emulator window must be **visible** (not minimized)
+That's it.
 
-**That's it!** No ADB installation needed.
+## 2. Install
 
-### 2. Download Stamina Buyer
+Download the prebuilt binary for your OS:
 
-Download the executable for your platform:
-- **Windows:** [staminabuyer.exe](releases)
-- **macOS/Linux:** [staminabuyer](releases) (then `chmod +x staminabuyer`)
+- **Windows:** `staminabuyer.exe` — [Releases](https://github.com/niklasdkristiansen/stamina-buyer/releases)
+- **macOS:** `staminabuyer` — [Releases](https://github.com/niklasdkristiansen/stamina-buyer/releases)
+  - First run: right-click → Open (bypasses Gatekeeper), or `chmod +x staminabuyer`
 
-Or install with pip:
+Prefer Python? `pip install -e .` from the repo (requires Python ≥ 3.11).
+
+## 3. Run it
+
+**Double-click the executable.** The GUI opens automatically.
+
+| In the window | What to do |
+| --- | --- |
+| **Detect** | Click it. The tool finds your emulator window by title. |
+| **Stamina amount** | Type how much stamina you want to buy (e.g. `500`). |
+| **Add** | Adds that target to the queue. Repeat for more emulators if you want. |
+| **Start** | Go. Live log shows every purchase as it happens. |
+| **Stop / X** | Cancels gracefully at the next safe checkpoint. |
+
+> ⚠️ Keep the emulator window visible for the whole run. If you
+> alt-tab over it or minimize it, the tool can't read pixels and
+> won't be able to click.
+
+## 4. That's it
+
+The tool:
+
+1. Captures the emulator window at native resolution.
+2. Calibrates the UI's scale from the refresh button, so it handles any window size or DPI.
+3. Finds the best-scoring available stamina card, skipping already-purchased (greyed-out) ones.
+4. Taps the gem-price button, then the confirmation dialog.
+5. Refreshes the Black Market as needed and repeats until the requested stamina is hit.
+
+---
+
+## Customising the item catalog
+
+The default catalog lives in [`assets/items.yaml`](assets/items.yaml) and
+is bundled into the binary. Override it by editing that file (if you're
+running from source) or, with the CLI, via `--items-file`:
+
+```yaml
+# my_items.yaml
+items:
+  - template: stamina_10   # PNG in assets/icons/ (without extension)
+    amount: 500            # stamina credited per purchase
+  - template: stamina_1
+    amount: 50
+```
+
+Items are tried in listed order (top = highest priority).
+
+## Troubleshooting
+
+### The "Detect" button doesn't find my emulator
+
+- Make sure the emulator window is open and on top of other windows.
+- Restart the emulator. Some emulators take a few seconds to register
+  their window title with the OS.
+- On macOS, the first run may prompt for **Accessibility / Screen
+  Recording** permissions — grant both, then restart the app.
+
+### It says it bought something but nothing happened in-game
+
+- The gem-price button may have been mis-targeted. Reduce the emulator
+  window size slightly and retry — really small or really stretched
+  windows can push the price button off its expected spot.
+- Check that the Black Market screen is actually showing cards (not an
+  overlay dialog, chat popup, ad, etc.).
+
+### Clicks land in the wrong place (macOS / Retina)
+
+DPI scaling is auto-measured on the first screenshot, so the very first
+click after launching may be learning the scale. If subsequent clicks are
+still off, close the app, make sure the emulator isn't mid-animation,
+and relaunch.
+
+### Purchases feel too fast / rate-limited
+
+If you want more breathing room between clicks, use a config file with
+the CLI (see below) — the GUI uses sensible defaults.
+
+---
+
+## Advanced: CLI
+
+The CLI is here for scripting, automation, dry runs, and CI. The GUI is
+the recommended path for everyday use.
+
+### Find your emulator window title
+
 ```bash
-pip install stamina-buyer
+staminabuyer list-windows
 ```
 
-### 3. Find Your Emulator Window
+### Dry-run (no clicks)
 
 ```bash
-./staminabuyer list-windows
+staminabuyer run --target "BlueStacks App Player:100" --dry-run
 ```
 
-This shows all emulator windows:
-```
-Found emulator windows:
-  • BlueStacks App Player
-  • LDPlayer
-  • NoxPlayer
-```
-
-Note your emulator's window title!
-
-### 4. Navigate to Black Market
-
-In Evony:
-1. Open your emulator
-2. Navigate to **Black Market** screen
-3. Make sure stamina cards are visible (if not, wait for refresh or use Instant Refresh)
-
-### 5. Run Stamina Buyer
-
-**Dry Run (Test First - Recommended):**
-```bash
-# Replace "BlueStacks" with your window title from step 3
-./staminabuyer run --target "BlueStacks:10" --dry-run
-```
-
-This will test detection without actually clicking anything. You should see logs like:
-```
-✓ Matched 'stamina_10' with score 0.826
-Tapping coordinates (150, 950)
-```
-
-**Real Purchase:**
-```bash
-# Buy 100 stamina (10 packs of 10)
-./staminabuyer run --target "BlueStacks:100"
-```
-
-**Important:** Keep the emulator window visible during operation!
-
-## 📝 Command Examples
+### Real run
 
 ```bash
-# Buy from single emulator
-./staminabuyer run --target "BlueStacks:500"
+staminabuyer run --target "BlueStacks App Player:100"
+```
 
-# Buy from multiple emulators
-./staminabuyer run \
+### Multiple targets
+
+```bash
+staminabuyer run \
   --target "BlueStacks:500" \
   --target "LDPlayer:300"
-
-# Test without clicking (dry run)
-./staminabuyer run --target "BlueStacks:100" --dry-run
-
-# More retries if detection is slow
-./staminabuyer run --target "BlueStacks:100" --max-retries 5
 ```
 
-## 🎯 Target Format
+### Config file
 
-```
---target "<WindowTitle>:<StaminaAmount>"
-```
-
-- **WindowTitle:** Window title from `staminabuyer list-windows`
-- **StaminaAmount:** Total stamina to buy (buys in packs of 10)
-
-Examples:
-- `"BlueStacks:100"` - Buy 100 stamina (10 packs)
-- `"LDPlayer:500"` - Buy 500 stamina (50 packs)
-- `"NoxPlayer:50"` - Buy 50 stamina (5 packs)
-
-**Tip:** If window title has spaces, use quotes: `"BlueStacks App Player:100"`
-
-## 🔧 Troubleshooting
-
-### "Failed to locate 'stamina_10'"
-
-**Cause:** Not at Black Market screen, or cards look different
-
-**Fix:**
-1. Make sure you're on the Black Market screen
-2. Make sure stamina cards are visible (wait for refresh or use Instant Refresh)
-3. Ensure emulator window is fully visible (not partially off-screen)
-4. Try increasing retries: `--max-retries 5`
-
-### "Could not find window with title..."
-
-**Cause:** Window title doesn't match or emulator not visible
-
-**Fix:**
-1. Run `staminabuyer list-windows` to see exact window title
-2. Copy the exact title (including spaces and special characters)
-3. Use quotes around title: `--target "BlueStacks App Player:100"`
-4. Make sure emulator window is not minimized
-
-### Clicks in wrong location
-
-**Cause:** Window moved or coordinates off
-
-**Fix:**
-1. Keep emulator window in same position during operation
-2. Make sure window is not maximized (some OSes add borders)
-3. Try running dry-run first to verify detection
-4. Close and restart both emulator and tool
-
-### Purchases too fast
-
-**Cause:** Default delay might be too short for your game/network
-
-**Fix:**
-Create a config file `config.yaml`:
 ```yaml
+# config.yaml
 targets:
-  - name: "emulator-5554"
+  - name: "BlueStacks App Player"
     stamina: 500
-purchase_delay_seconds: 2.0  # Increase delay
-jitter_seconds: 0.5
+purchase_delay_seconds: 2.0   # base delay between purchase attempts
+jitter_seconds: 0.5           # random +/- added to the delay
 ```
-
-Then run:
-```bash
-./staminabuyer run --config config.yaml
-```
-
-## 📊 What It Does
-
-1. **Captures** screenshot from emulator
-2. **Detects** stamina card using computer vision
-3. **Taps** gem purchase button (bottom of card)
-4. **Detects** confirmation dialog
-5. **Taps** confirm button
-6. **Repeats** until requested amount purchased
-
-## 🛡️ Safety Features
-
-- **Dry-run mode** to test without tapping
-- **Template matching** ensures correct elements are tapped
-- **Retry logic** if detection fails temporarily
-- **Logging** of all actions for debugging
-
-## ⚙️ Advanced Options
 
 ```bash
-# Use configuration file
-./staminabuyer run --config myconfig.yaml
-
-# Adjust retry attempts
-./staminabuyer run --target "emu:100" --max-retries 5
-
-# Multiple targets from config + CLI
-./staminabuyer run --config base.yaml --target "emu2:100"
+staminabuyer run --config config.yaml
 ```
 
-## 📞 Getting Help
+CLI `--target` flags are additive with file targets.
 
-If issues persist:
-1. Check that ADB works: `adb devices`
-2. Test with dry-run: `--dry-run`
-3. Check logs for specific errors
-4. Verify you're on Black Market screen
-5. Try manually tapping to confirm UI is responsive
+### Custom item catalog
 
-## ⚖️ Disclaimer
+```bash
+staminabuyer run --target "BlueStacks:1000" --items-file my_items.yaml
+```
 
-This tool is for personal use. Use at your own risk. Automating games may violate terms of service.
+### Everything else
 
+```bash
+staminabuyer --help
+staminabuyer run --help
+```
+
+---
+
+## Disclaimer
+
+This tool is for personal use. Use at your own risk. Automating games may
+violate the game's terms of service.

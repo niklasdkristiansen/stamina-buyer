@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from staminabuyer.pipeline import PipelineOptions, STAMINA_ITEMS
+from staminabuyer.pipeline import DEFAULT_STAMINA_ITEMS, PipelineOptions
 from staminabuyer.vision.matcher import TemplateLibrary
 
 # Use production settings
@@ -33,8 +33,6 @@ def library():
         scales=PROD_OPTIONS.template_scales,
         grayscale=True,
         descriptor_min_matches=PROD_OPTIONS.descriptor_min_matches,
-        normalize_resolution=PROD_OPTIONS.normalize_resolution,
-        template_source_resolution=PROD_OPTIONS.template_source_resolution,
     )
 
 
@@ -116,6 +114,21 @@ class TestNoFalsePositives:
         assert len(matches_1) == 0, \
             f"Should NOT find stamina_1 in no-stamina screenshot, but found {len(matches_1)} matches"
 
+    def test_not_stamina_images_do_not_match(self, library):
+        """Dedicated negative samples must never match stamina templates."""
+        for filename in ("not_stamina.png", "not_stamina_2.png"):
+            path = ASSETS_DIR / filename
+            if not path.exists():
+                pytest.skip(f"Negative sample not found: {filename}")
+
+            image_bytes = path.read_bytes()
+            for template in ("stamina_1", "stamina_10"):
+                matches = library.match(image_bytes, [template])
+                assert not matches, (
+                    f"False positive: {template} matched in {filename} "
+                    f"(best score {matches[0].score:.3f})"
+                )
+
     def test_boots_not_matched_as_stamina(self, library):
         """Test that boots are NOT matched as stamina."""
         screenshot_path = ASSETS_DIR / "blackmarket_with_boots.png"
@@ -136,38 +149,58 @@ class TestNoFalsePositives:
                 f"False positive! Matched stamina_1 in boots area at ({x}, {y})"
 
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
 class TestBoughtItemDetection:
-    """Test detection of already-purchased items."""
+    """Bought/greyed-out items are detected by ROI saturation rather than a
+    separate template. Regular stamina cards measure mean-saturation ~145 in
+    HSV; bought ones ~35. The pipeline treats saturation below
+    ``bought_saturation_threshold`` (default 80) as purchased."""
 
-    def test_stamina_10_bought_template_exists(self, library):
-        """Verify stamina_10_bought template is loaded."""
-        assert library.has_template("stamina_10_bought"), \
-            "stamina_10_bought template should be loaded"
+    @pytest.mark.parametrize(
+        "fixture_name,template_name",
+        [
+            ("stamina_10_bought.png", "stamina_10"),
+            ("stamina_1_bought.png", "stamina_1"),
+        ],
+    )
+    def test_bought_roi_has_low_saturation(self, library, fixture_name, template_name):
+        path = FIXTURES_DIR / fixture_name
+        if not path.exists():
+            pytest.skip(f"Fixture not found: {path}")
 
-    def test_stamina_1_bought_template_exists(self, library):
-        """Verify stamina_1_bought template is loaded."""
-        assert library.has_template("stamina_1_bought"), \
-            "stamina_1_bought template should be loaded"
+        image_bytes = path.read_bytes()
+        matches = library.match(image_bytes, [template_name], threshold=0.3)
+        assert matches, f"should still match the regular template on a bought {template_name}"
 
-    def test_bought_indicator_matches_bought_screenshot(self, library):
-        """Test that bought template matches bought item screenshot."""
-        bought_path = ASSETS_DIR / "stamina_10_bought.png"
-        if not bought_path.exists():
-            pytest.skip(f"Bought screenshot not found: {bought_path}")
-
-        bought_bytes = bought_path.read_bytes()
-        
-        # Use lower threshold for bought detection (as per pipeline logic)
-        library_low = TemplateLibrary(
-            template_dir=ASSETS_DIR,
-            threshold=0.3,  # Lower threshold for bought detection
-            scales=PROD_OPTIONS.template_scales,
-            grayscale=True,
-            descriptor_min_matches=PROD_OPTIONS.descriptor_min_matches,
+        saturation = library.mean_saturation(image_bytes, matches[0])
+        assert saturation < PROD_OPTIONS.bought_saturation_threshold, (
+            f"bought {template_name} saturation {saturation:.1f} should be below "
+            f"threshold {PROD_OPTIONS.bought_saturation_threshold}"
         )
-        
-        matches = library_low.match(bought_bytes, ["stamina_10_bought"])
-        assert len(matches) > 0, "Should find stamina_10_bought indicator in bought screenshot"
+
+    @pytest.mark.parametrize(
+        "screenshot_name,template_name",
+        [
+            ("screenshot-bm.png", "stamina_10"),
+            ("blackmarket_1_stamina.png", "stamina_1"),
+        ],
+    )
+    def test_unbought_roi_has_high_saturation(self, library, screenshot_name, template_name):
+        path = ASSETS_DIR / screenshot_name
+        if not path.exists():
+            pytest.skip(f"Screenshot not found: {path}")
+
+        image_bytes = path.read_bytes()
+        matches = library.match(image_bytes, [template_name])
+        assert matches, f"expected {template_name} match in {screenshot_name}"
+
+        saturation = library.mean_saturation(image_bytes, matches[0])
+        assert saturation >= PROD_OPTIONS.bought_saturation_threshold, (
+            f"available {template_name} saturation {saturation:.1f} should be above "
+            f"threshold {PROD_OPTIONS.bought_saturation_threshold}"
+        )
 
 
 class TestRefreshButtonDetection:
@@ -200,9 +233,9 @@ class TestPipelineIntegration:
             pytest.skip(f"Screenshot not found: {screenshot_path}")
 
         screenshot_bytes = screenshot_path.read_bytes()
-        
+
         # Simulate pipeline logic - try each stamina type in priority order
-        for stamina_item in STAMINA_ITEMS:
+        for stamina_item in DEFAULT_STAMINA_ITEMS:
             matches = library.match(screenshot_bytes, [stamina_item.template_name])
             if matches:
                 # First match should be stamina_10 (higher priority)
@@ -214,29 +247,32 @@ class TestPipelineIntegration:
         else:
             pytest.fail("No stamina items matched in screenshot-bm.png")
 
-    def test_gem_button_coordinates_within_bounds(self, library):
-        """Test that gem button tap coordinates are within matched item bounds."""
+    def test_gem_button_tap_lands_in_bottom_gem_zone(self, library):
+        """Gem-button tap coords must land in the card's bottom 15% (where the
+        price button lives) and stay inside the horizontal card bounds."""
         screenshot_path = ASSETS_DIR / "screenshot-bm.png"
         if not screenshot_path.exists():
             pytest.skip(f"Screenshot not found: {screenshot_path}")
 
         screenshot_bytes = screenshot_path.read_bytes()
         matches = library.match(screenshot_bytes, ["stamina_10"])
-        
         assert len(matches) > 0, "Should find stamina_10"
         match = matches[0]
-        
-        # Calculate tap coordinates (90% down, center horizontal)
+
         width = match.bottom_right[0] - match.top_left[0]
         height = match.bottom_right[1] - match.top_left[1]
         tap_x = match.top_left[0] + width // 2
         tap_y = match.top_left[1] + int(height * 0.9)
-        
-        # Verify tap is within bounds
-        assert match.top_left[0] <= tap_x <= match.bottom_right[0], \
+        tap_y = min(match.bottom_right[1] - 1, max(match.top_left[1], tap_y))
+
+        assert match.top_left[0] <= tap_x <= match.bottom_right[0], (
             f"Tap X {tap_x} not in bounds [{match.top_left[0]}, {match.bottom_right[0]}]"
-        assert match.top_left[1] <= tap_y <= match.bottom_right[1], \
-            f"Tap Y {tap_y} not in bounds [{match.top_left[1]}, {match.bottom_right[1]}]"
+        )
+        gem_zone_start = match.bottom_right[1] - int(height * 0.15)
+        assert tap_y >= gem_zone_start, (
+            f"Tap Y {tap_y} not in gem zone (starts at {gem_zone_start}). "
+            f"Match: top={match.top_left[1]}, bottom={match.bottom_right[1]}, height={height}"
+        )
 
 
 class TestMultiScaleMatching:
@@ -289,26 +325,37 @@ class TestTemplateLoading:
         """Verify all production-required templates are loaded."""
         required_templates = [
             "stamina_10",
-            "stamina_10_bought",
             "stamina_1",
-            "stamina_1_bought",
             "refresh",
             "to_confirm",
         ]
-        
+
         for template_name in required_templates:
-            assert library.has_template(template_name), \
+            assert library.has_template(template_name), (
                 f"Required template '{template_name}' not loaded"
+            )
+
+    def test_bought_templates_are_not_loaded(self, library):
+        """Bought/greyed-out detection is now saturation-based; the old per-state
+        templates should no longer be present in the assets directory."""
+        for name in ("stamina_10_bought", "stamina_1_bought"):
+            assert not library.has_template(name), (
+                f"'{name}' should not be loaded as a template any more — "
+                f"bought detection uses ROI saturation instead"
+            )
 
     def test_template_scales_configured(self, library):
-        """Verify multi-scale matching is configured."""
-        assert len(library.scales) > 1, \
+        """Verify multi-scale matching is configured with a 1.0 anchor."""
+        assert len(library.scales) > 1, (
             f"Expected multiple scales for multi-scale matching, got {library.scales}"
-        # Templates extracted from 322×592 source, need various scales for different screenshot sizes
-        assert 0.5 in library.scales or 0.6 in library.scales, \
-            "Should have scales for smaller screenshots (scale down)"
-        assert 1.0 in library.scales, \
-            "Should have 1.0 scale for same-resolution matching"
-        assert 1.5 in library.scales or 1.7 in library.scales or 2.0 in library.scales, \
-            "Should have large scales for bigger screenshots"
+        )
+        assert 1.0 in library.scales, (
+            "Scales must include 1.0 so a correctly-sized screenshot matches"
+        )
+        # Sanity: the configured band should be monotonically increasing and
+        # symmetric enough around 1.0 that +/- tolerance works in both directions.
+        scales = sorted(library.scales)
+        assert scales[0] < 1.0 < scales[-1], (
+            f"Scale band should straddle 1.0 for tolerance both ways, got {scales}"
+        )
 
