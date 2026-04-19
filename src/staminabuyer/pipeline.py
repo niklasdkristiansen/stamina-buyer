@@ -155,13 +155,19 @@ class PipelineOptions:
     # ones ~35, so 80 leaves plenty of margin either way.
     bought_saturation_threshold: float = 80.0
     # Scale sweep used by anchor calibration. Wide by design — the anchor
-    # (refresh button) can appear anywhere from a tiny to a large window, and
-    # we need the sweep to find it. After calibration, the frame is resized
-    # so the UI matches template scale, and item matches use a tight band
-    # around 1.0 (see ``item_scale_tolerance``). So a wide sweep here is
-    # cheap: only the anchor is evaluated at every scale; items aren't.
+    # (refresh button) can appear anywhere from a small to a large window,
+    # and we need the sweep to find it. After calibration, the frame is
+    # resized so the UI matches template scale, and item matches use a
+    # tight band around 1.0 (see ``item_scale_tolerance``).
+    #
+    # The sweep covers 0.40x–2.20x. Beyond those bounds in either direction,
+    # template matching becomes noise-dominated: tiny templates cross-match
+    # arbitrary UI regions (false-positive anchors), and huge ones lose
+    # detail through upsampling (no match at all). If the diagnostic log
+    # reveals your window lands outside this band, the right fix is to
+    # regenerate templates at your preferred size, not to widen the sweep.
     template_scales: tuple[float, ...] = tuple(
-        round(0.50 + i * 0.05, 2) for i in range(31)  # 0.50 → 2.00 at 0.05 steps
+        round(0.40 + i * 0.05, 2) for i in range(37)  # 0.40 → 2.20 at 0.05 steps
     )
     reference_width: int | None = None  # Legacy aspect-preserving rescale; superseded by frame normalization.
     save_debug_screenshots: bool = False
@@ -246,6 +252,10 @@ class PipelineRunner:
         anchor is found) and returns the new value. Returns ``None`` and
         leaves the previous scale intact when the anchor can't be located —
         meaning "probably not on the expected screen".
+
+        On failure, logs the best-effort probe so users can tell whether the
+        anchor was almost-matched (lower ``anchor_min_score``) vs. not
+        present at all (wrong screen, window outside sweep range).
         """
         anchor_match = self._templates.calibrate_scale(
             frame,
@@ -253,6 +263,7 @@ class PipelineRunner:
             min_score=self.options.anchor_min_score,
         )
         if anchor_match is None:
+            self._log_calibration_miss(frame)
             return None
         if self._calibrated_scale is None or abs(anchor_match.scale - self._calibrated_scale) > 0.01:
             self.console.log(
@@ -261,6 +272,37 @@ class PipelineRunner:
             )
         self._calibrated_scale = anchor_match.scale
         return anchor_match.scale
+
+    def _log_calibration_miss(self, frame: bytes) -> None:
+        """Re-run the anchor probe at zero threshold to surface diagnostics.
+
+        Cheap (reuses the same scale sweep) and only runs on the miss path,
+        so no impact on happy-path performance. Also saves a debug snapshot
+        when ``save_debug_screenshots`` is enabled, since the failing frame
+        is exactly what you need to diagnose a miscalibration offline.
+        """
+        probe = self._templates.match(
+            frame, list(self.options.anchor_icons), threshold=0.0
+        )
+        if probe:
+            best = probe[0]
+            self.console.log(
+                f"[yellow]Anchor miss: best candidate was '{best.icon}' @ "
+                f"scale {best.scale:.2f}x score {best.score:.3f} (need "
+                f"{self.options.anchor_min_score:.2f}). If score is close, "
+                f"try lowering anchor_min_score; if far below, the UI is "
+                f"probably not on the Black Market or outside the "
+                f"{min(self.options.template_scales):.2f}x–"
+                f"{max(self.options.template_scales):.2f}x sweep.[/yellow]"
+            )
+        else:
+            self.console.log(
+                "[yellow]Anchor miss: no candidate at any scale. Window "
+                "may be far outside the supported size range.[/yellow]"
+            )
+
+        if self.options.save_debug_screenshots:
+            self._save_debug_screenshot(frame, "calibration_miss")
 
     def _check_cancelled(self) -> None:
         """Check if operation was cancelled and raise if so."""
@@ -458,19 +500,46 @@ class PipelineRunner:
         Raises:
             RuntimeError: No available stamina item after exhausting refreshes.
         """
-        for refresh_attempt in range(self.options.max_refreshes + 1):
+        # Separate budgets for "couldn't see the UI at all" vs. "saw the UI
+        # but no items were available". Counting calibration misses against
+        # the refresh budget silently burns through attempts without ever
+        # tapping refresh, and masks the real cause of failure.
+        max_calibration_misses = max(1, self.options.max_refreshes)
+        calibration_misses = 0
+        refresh_attempt = 0
+
+        while True:
             self._check_cancelled()
 
             frame = client.screencap()
             calibrated_scale = self._calibrate_from_frame(frame)
+
             if calibrated_scale is None:
+                calibration_misses += 1
+                if calibration_misses > max_calibration_misses:
+                    if self.options.save_debug_screenshots:
+                        self._save_debug_screenshot(frame, "calibration_miss_final")
+                    raise RuntimeError(
+                        f"UI scale could not be detected after "
+                        f"{calibration_misses} attempts — anchor '"
+                        f"{', '.join(self.options.anchor_icons)}' was never "
+                        f"found. Check that the Black Market screen is "
+                        f"visible and the window is between "
+                        f"{min(self.options.template_scales):.2f}x and "
+                        f"{max(self.options.template_scales):.2f}x of "
+                        f"template scale. Enable save_debug_screenshots "
+                        f"to capture the failing frame."
+                    )
                 self.console.log(
-                    "[yellow]⚠️ UI scale not detected — probably not on the "
-                    "Black Market screen, or the window is outside the "
-                    "supported size range. Waiting before retrying...[/yellow]"
+                    f"[yellow]⚠️ UI scale not detected "
+                    f"({calibration_misses}/{max_calibration_misses}). "
+                    f"Waiting before retrying...[/yellow]"
                 )
                 time.sleep(self.options.wrong_screen_wait_seconds)
                 continue
+
+            # We're on the right screen; reset the miss counter.
+            calibration_misses = 0
 
             scores = self._score_items(frame, frame_scale=calibrated_scale)
 
@@ -486,13 +555,12 @@ class PipelineRunner:
                     f"{self.options.max_refreshes} refresh attempts."
                 )
 
+            refresh_attempt += 1
             self.console.log(
                 f"No stamina items found. Refreshing Black Market... "
-                f"(refresh #{refresh_attempt + 1})"
+                f"(refresh #{refresh_attempt})"
             )
             self._refresh_market(client)
-
-        raise RuntimeError("Failed to locate any stamina items")
 
     def _score_items(
         self, frame: bytes, frame_scale: float

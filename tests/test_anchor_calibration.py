@@ -18,8 +18,9 @@ from staminabuyer.vision.matcher import TemplateLibrary, _within_tolerance
 
 ASSETS_DIR = Path(__file__).parent.parent / "assets" / "icons"
 
-# Scale sweep wide enough for the rescale tests below.
-WIDE_SCALES = tuple(round(s, 2) for s in np.arange(0.5, 2.01, 0.05))
+# Scale sweep wide enough for the rescale tests below — deliberately matches
+# the production default (0.40x–2.20x) so test coverage tracks reality.
+WIDE_SCALES = tuple(round(s, 2) for s in np.arange(0.40, 2.21, 0.05))
 
 
 @pytest.fixture(scope="module")
@@ -202,7 +203,7 @@ class TestPipelineCalibrationIntegration:
         )
         assert runner._calibrated_scale == calibrated
 
-    @pytest.mark.parametrize("factor", [0.70, 0.85, 1.0, 1.25, 1.5, 1.75, 2.0])
+    @pytest.mark.parametrize("factor", [0.55, 0.70, 0.85, 1.0, 1.25, 1.5, 1.75, 2.0])
     def test_items_match_on_rescaled_frames_via_normalization(self, factor):
         """Frame-normalization end-to-end: given a screenshot rescaled by
         ``factor``, anchor calibration + _score_items must still find the
@@ -261,3 +262,27 @@ class TestPipelineCalibrationIntegration:
         # A cropped stamina icon is too small to plausibly contain the refresh button.
         runner, _ = self._build_runner([anchor_template.read_bytes()])
         assert runner._calibrate_from_frame(anchor_template.read_bytes()) is None
+
+    def test_calibration_miss_logs_best_candidate_score(self, capsys):
+        """When calibration misses, the diagnostic log should surface the
+        best-effort probe so users can tell whether the anchor was barely
+        missed (lower min_score) vs. wholly absent (wrong screen)."""
+        anchor_template = ASSETS_DIR / "stamina_10.png"
+        if not anchor_template.exists():
+            pytest.skip(f"missing {anchor_template}")
+
+        runner, _ = self._build_runner([anchor_template.read_bytes()])
+        # Route logs to a plain-text console so capsys can see them regardless
+        # of rich's markup. The test checks substance, not formatting.
+        from rich.console import Console
+
+        runner.console = Console(force_terminal=False, no_color=True)
+
+        result = runner._calibrate_from_frame(anchor_template.read_bytes())
+        assert result is None
+
+        captured = capsys.readouterr()
+        combined = (captured.out + captured.err).lower()
+        assert "anchor miss" in combined, (
+            f"expected 'Anchor miss:' diagnostic in logs; got: {captured.out!r}"
+        )
