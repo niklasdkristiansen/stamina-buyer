@@ -450,9 +450,20 @@ class TemplateLibrary:
         width: int,
         height: int,
     ) -> bool:
-        if variant.descriptors is None or len(variant.descriptors) < self.descriptor_min_matches:
-            # Template lacks enough features, so skip the descriptor filter.
+        # ``variant.descriptors is None`` means ORB found nothing on the
+        # template itself — we genuinely cannot verify, so we accept the match
+        # on score alone. We also short-circuit when the template has fewer
+        # than three descriptors, since any match count is statistically
+        # meaningless at that point. For every other case we require at least
+        # ``min(len(descriptors), descriptor_min_matches)`` good matches. This
+        # closes a v2.3.0 loophole where small scaled templates silently
+        # bypassed verification and produced cross-card false positives.
+        if variant.descriptors is None:
             return True
+        num_descriptors = len(variant.descriptors)
+        if num_descriptors < 3:
+            return True
+        required_matches = min(num_descriptors, self.descriptor_min_matches)
         x, y = top_left
         roi = frame_color[y : y + height, x : x + width]
         if roi.shape[:2] != (height, width):
@@ -469,4 +480,4 @@ class TemplateLibrary:
             m, n = pair
             if m.distance < self.descriptor_ratio * n.distance:
                 good += 1
-        return good >= self.descriptor_min_matches
+        return good >= required_matches

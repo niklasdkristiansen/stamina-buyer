@@ -345,17 +345,28 @@ class TestTemplateLoading:
             )
 
     def test_template_scales_configured(self, library):
-        """Verify multi-scale matching is configured with a 1.0 anchor."""
+        """Verify multi-scale matching is configured with a 1.0 anchor and a
+        conservative band. Going too wide drops templates below the ORB
+        descriptor-check minimum and lets cross-card false positives through
+        (v2.3.0 regression fixed in v2.3.1)."""
         assert len(library.scales) > 1, (
             f"Expected multiple scales for multi-scale matching, got {library.scales}"
         )
         assert 1.0 in library.scales, (
             "Scales must include 1.0 so a correctly-sized screenshot matches"
         )
-        # Sanity: the configured band should be monotonically increasing and
-        # symmetric enough around 1.0 that +/- tolerance works in both directions.
         scales = sorted(library.scales)
         assert scales[0] < 1.0 < scales[-1], (
             f"Scale band should straddle 1.0 for tolerance both ways, got {scales}"
+        )
+        # Keep the band tight enough that shrunk templates retain plenty of
+        # ORB features. 0.5x was the v2.3.0 value and caused regressions.
+        assert scales[0] >= 0.65, (
+            f"Minimum scale must stay at or above 0.65 to preserve "
+            f"ORB features on scaled templates; got {scales[0]}"
+        )
+        assert scales[-1] <= 1.5, (
+            f"Maximum scale must stay at or below 1.5; beyond that, "
+            f"template-matching noise dominates real signal; got {scales[-1]}"
         )
 

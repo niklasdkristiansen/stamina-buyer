@@ -154,21 +154,26 @@ class PipelineOptions:
     # Evony UI desaturates bought cards). Regular cards measure ~145, bought
     # ones ~35, so 80 leaves plenty of margin either way.
     bought_saturation_threshold: float = 80.0
-    # Scale sweep used when we don't yet know the UI's scale. Once an anchor
-    # is located, subsequent matches are restricted to a tight tolerance band
-    # around the calibrated scale (see ``scale_tolerance``), which is both
-    # faster and more robust than scanning the full range every frame.
+    # Conservative scale sweep. The templates were authored at roughly the
+    # user's preferred window size, so we only vary ±30%. Going wider creates
+    # templates small enough to fall below ``descriptor_min_matches``, which
+    # disables the ORB verification check and lets false positives through.
+    # If you need to match much smaller/larger windows, regenerate templates
+    # at that size rather than widening this band.
     template_scales: tuple[float, ...] = (
-        0.50, 0.60, 0.70, 0.80, 0.90, 0.95,
-        1.00, 1.05, 1.10, 1.25, 1.50, 1.75, 2.00,
+        0.70, 0.80, 0.90, 0.95, 1.00, 1.05, 1.10, 1.20, 1.30,
     )
-    reference_width: int | None = None  # Legacy aspect-preserving rescale; anchor calibration supersedes this.
+    reference_width: int | None = None  # Legacy aspect-preserving rescale; rarely needed now.
     save_debug_screenshots: bool = False
     items_file: Path | None = None  # Optional path to items.yaml; None = bundled default.
-    # Anchor-based scale calibration:
-    anchor_icons: tuple[str, ...] = ("refresh",)  # Icons used to detect the UI's current scale.
-    anchor_min_score: float = 0.6  # Minimum anchor score to trust calibration.
-    scale_tolerance: float = 0.10  # Fractional band around the calibrated scale for item matches.
+    # Anchor-based scale calibration runs every frame but is used for logging
+    # and "are we on the right screen?" sanity checks only. We intentionally
+    # do NOT narrow item matching to a band around the calibrated scale —
+    # doing so amplified miscalibration into wholesale false-positives /
+    # false-negatives in v2.3.0.
+    anchor_icons: tuple[str, ...] = ("refresh",)
+    anchor_min_score: float = 0.6
+    scale_tolerance: float = 0.10  # Retained for tests / future use; currently unused in the runner.
 
 
 @dataclass(slots=True)
@@ -431,9 +436,14 @@ class PipelineRunner:
     ) -> tuple[MatchResult, StaminaItem]:
         """Find the best available (un-purchased) stamina item, refreshing if needed.
 
-        Composes the smaller helpers below: capture & calibrate → score every
-        item → pick the highest-scoring *available* one (ignoring greyed-out
-        cards by saturation) → refresh and retry if nothing usable was found.
+        Composes the smaller helpers below: capture (and opportunistically
+        log a calibrated UI scale) → score every item → pick the
+        highest-scoring *available* one (ignoring greyed-out cards by
+        saturation) → refresh and retry if nothing usable was found.
+
+        Calibration is informational only: we no longer filter item matches
+        by the calibrated scale, because a miscalibrated anchor used to
+        silently break every subsequent match (see v2.3.1 release notes).
 
         Raises:
             RuntimeError: No available stamina item after exhausting refreshes.
@@ -442,8 +452,8 @@ class PipelineRunner:
             self._check_cancelled()
 
             frame = client.screencap()
-            scale_hint = self._calibrate_from_frame(frame)
-            scores = self._score_items(frame, scale_hint=scale_hint)
+            self._calibrate_from_frame(frame)  # log-only
+            scores = self._score_items(frame)
 
             selection = self._select_available_item(frame, scores)
             if selection is not None:
@@ -466,12 +476,13 @@ class PipelineRunner:
         raise RuntimeError("Failed to locate any stamina items")
 
     def _score_items(
-        self, frame: bytes, scale_hint: float | None
+        self, frame: bytes
     ) -> dict[str, tuple[float, MatchResult | None]]:
         """Return ``{template_name: (best_score, best_match)}`` for every item.
 
         Uses a low acceptance threshold so callers can see and log scores for
         items that narrowly missed, rather than silently getting empty lists.
+        Scans the full configured scale band — no anchor-derived filtering.
         """
         scores: dict[str, tuple[float, MatchResult | None]] = {}
         for item in self._items:
@@ -479,8 +490,6 @@ class PipelineRunner:
                 frame,
                 [item.template_name],
                 threshold=0.3,
-                scale_hint=scale_hint,
-                scale_tolerance=self.options.scale_tolerance,
             )
             best = matches[0] if matches else None
             scores[item.template_name] = (best.score if best else 0.0, best)
@@ -553,15 +562,12 @@ class PipelineRunner:
         for attempt in range(1, self.options.max_retries + 1):
             frame = client.screencap()
 
-            # Refresh calibration each retry so zoom/resize mid-run is tolerated.
+            # Opportunistic calibration (logged only — not used as a filter,
+            # to avoid the v2.3.0 regression where a wrong anchor scale hid
+            # the real button).
             self._calibrate_from_frame(frame)
 
-            matches = self._templates.match(
-                frame,
-                [icon_name],
-                scale_hint=self._calibrated_scale,
-                scale_tolerance=self.options.scale_tolerance,
-            )
+            matches = self._templates.match(frame, [icon_name])
             if matches:
                 match = matches[0]
                 self.console.log(
