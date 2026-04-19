@@ -656,9 +656,21 @@ class PipelineRunner:
         runs a tight scale match in the normalized frame. A failed
         calibration is treated as a soft failure (wait and retry); an
         exhausted retry budget raises.
+
+        When ``icon_name`` is one of the configured anchor icons (typically
+        the refresh button), we accept matches at ``anchor_min_score`` rather
+        than the stricter ``template_threshold``. Without this, a small
+        window that scores refresh at e.g. 0.655 would pass calibration
+        (anchor gate is 0.6) yet fail every refresh tap (button gate was
+        0.7) — the exact symptom reported in v2.4.1.
         """
         if not self._templates.has_template(icon_name):
             raise RuntimeError(f"Template '{icon_name}' is not available in assets/icons.")
+
+        is_anchor_icon = icon_name in self.options.anchor_icons
+        match_threshold = (
+            self.options.anchor_min_score if is_anchor_icon else self.options.template_threshold
+        )
 
         for attempt in range(1, self.options.max_retries + 1):
             frame = client.screencap()
@@ -676,6 +688,7 @@ class PipelineRunner:
             matches = self._templates.match(
                 frame,
                 [icon_name],
+                threshold=match_threshold,
                 frame_scale=calibrated_scale,
                 scale_hint=1.0,
                 scale_tolerance=self.options.item_scale_tolerance,

@@ -263,6 +263,64 @@ class TestPipelineCalibrationIntegration:
         runner, _ = self._build_runner([anchor_template.read_bytes()])
         assert runner._calibrate_from_frame(anchor_template.read_bytes()) is None
 
+    def test_anchor_icons_use_anchor_threshold_for_tap_matches(self):
+        """Regression test for v2.4.1 small-window bug.
+
+        Scenario: the refresh icon matches at ~0.655 on a shrunk frame —
+        above ``anchor_min_score`` (0.6) but below ``template_threshold``
+        (0.7). Calibration succeeds, but the subsequent ``_match_with_retry``
+        call used the stricter button threshold and failed forever, leaving
+        the pipeline unable to tap refresh. The fix: when the icon is also
+        an anchor, match it with the same gate we use for calibration.
+        """
+        from staminabuyer.pipeline import PipelineOptions, PipelineRunner
+
+        class _CountingClient:
+            """Minimal stub — just returns a known frame, counts taps."""
+
+            def __init__(self, frame):
+                self._frame = frame
+                self.taps: list[tuple[int, int]] = []
+
+            def screencap(self):
+                return self._frame
+
+            def tap(self, x, y):
+                self.taps.append((x, y))
+
+        # Rescale a real Black Market screenshot small enough that the
+        # refresh button degrades below the default 0.70 button threshold
+        # but stays above the 0.6 anchor threshold. 0.45x reliably hits
+        # this band in our test assets (normalized match ~0.675) —
+        # exactly the shape of the user's in-the-wild 0.655 report.
+        base = ASSETS_DIR / "screenshot-bm.png"
+        if not base.exists():
+            pytest.skip(f"missing {base}")
+        shrunk = _rescale_png(base, 0.45)
+
+        options = PipelineOptions(
+            dry_run=False,
+            max_retries=2,
+            template_scales=WIDE_SCALES,
+            anchor_icons=("refresh",),
+            anchor_min_score=0.6,
+            template_threshold=0.7,
+            item_scale_tolerance=0.08,
+        )
+        client = _CountingClient(shrunk)
+        runner = PipelineRunner(
+            options=options,
+            client_factory=lambda _title: client,  # type: ignore[arg-type]
+        )
+
+        # The refresh button is an anchor icon, so _match_with_retry should
+        # accept a match at ≥ anchor_min_score (0.6) even if it's under
+        # template_threshold (0.7). If the bug regresses, this raises
+        # RuntimeError("Failed to locate 'refresh'...").
+        match = runner._match_with_retry(client, "refresh")
+        assert match.icon == "refresh"
+        assert match.score >= options.anchor_min_score
+
     def test_calibration_miss_logs_best_candidate_score(self, capsys):
         """When calibration misses, the diagnostic log should surface the
         best-effort probe so users can tell whether the anchor was barely

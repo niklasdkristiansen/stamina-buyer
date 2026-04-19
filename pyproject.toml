@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stamina-buyer"
-version = "2.4.1"
+version = "2.4.2"
 description = "Automates Black Market stamina purchases in Evony emulators via direct screen capture and in-memory template matching."
 readme = "README.md"
 authors = [{ name = "Stamina Buyer" }]
