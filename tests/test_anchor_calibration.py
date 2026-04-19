@@ -178,7 +178,7 @@ class TestPipelineCalibrationIntegration:
             template_scales=WIDE_SCALES,
             anchor_icons=("refresh",),
             anchor_min_score=0.6,
-            scale_tolerance=0.1,
+            item_scale_tolerance=0.08,
         )
         runner = PipelineRunner(
             options=options,
@@ -201,3 +201,63 @@ class TestPipelineCalibrationIntegration:
             f"expected calibrated scale ≈ {factor}, got {calibrated}"
         )
         assert runner._calibrated_scale == calibrated
+
+    @pytest.mark.parametrize("factor", [0.70, 0.85, 1.0, 1.25, 1.5, 1.75, 2.0])
+    def test_items_match_on_rescaled_frames_via_normalization(self, factor):
+        """Frame-normalization end-to-end: given a screenshot rescaled by
+        ``factor``, anchor calibration + _score_items must still find the
+        stamina items, and the returned match coordinates must be in the
+        *rescaled* frame's coordinate space (i.e. scaled back from the
+        normalized working frame)."""
+        base = ASSETS_DIR / "screenshot-bm.png"
+        if not base.exists():
+            pytest.skip(f"missing {base}")
+
+        runner, _ = self._build_runner([_rescale_png(base, factor)])
+        frame = _rescale_png(base, factor)
+
+        calibrated = runner._calibrate_from_frame(frame)
+        assert calibrated is not None, f"anchor calibration must succeed at factor {factor}"
+
+        scores = runner._score_items(frame, frame_scale=calibrated)
+        # At least one stamina item should clear the production threshold at
+        # every supported scale — that's the whole point of frame normalization.
+        best_score = max(score for score, _ in scores.values())
+        assert best_score >= runner.options.template_threshold, (
+            f"no stamina item cleared threshold at factor {factor}: scores={scores}"
+        )
+
+        # Match coordinates must fall inside the rescaled frame, not the
+        # template-scale working frame (catches a whole class of "forgot to
+        # denormalize coordinates" bugs).
+        import cv2 as _cv2
+
+        import numpy as _np
+
+        frame_img = _cv2.imdecode(
+            _np.frombuffer(frame, dtype=_np.uint8), _cv2.IMREAD_COLOR
+        )
+        frame_h, frame_w = frame_img.shape[:2]
+        for score, match in scores.values():
+            if match is None or score < runner.options.template_threshold:
+                continue
+            x1, y1 = match.top_left
+            x2, y2 = match.bottom_right
+            assert 0 <= x1 < x2 <= frame_w, (
+                f"match x-coords {x1}-{x2} outside rescaled frame width {frame_w}"
+            )
+            assert 0 <= y1 < y2 <= frame_h, (
+                f"match y-coords {y1}-{y2} outside rescaled frame height {frame_h}"
+            )
+
+    def test_wrong_screen_returns_none_calibration(self):
+        """If the captured frame doesn't contain the anchor, calibration
+        returns None so the runner backs off instead of tapping at
+        unrelated screen content."""
+        anchor_template = ASSETS_DIR / "stamina_10.png"
+        if not anchor_template.exists():
+            pytest.skip(f"missing {anchor_template}")
+
+        # A cropped stamina icon is too small to plausibly contain the refresh button.
+        runner, _ = self._build_runner([anchor_template.read_bytes()])
+        assert runner._calibrate_from_frame(anchor_template.read_bytes()) is None

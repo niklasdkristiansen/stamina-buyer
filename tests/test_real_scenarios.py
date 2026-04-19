@@ -345,10 +345,13 @@ class TestTemplateLoading:
             )
 
     def test_template_scales_configured(self, library):
-        """Verify multi-scale matching is configured with a 1.0 anchor and a
-        conservative band. Going too wide drops templates below the ORB
-        descriptor-check minimum and lets cross-card false positives through
-        (v2.3.0 regression fixed in v2.3.1)."""
+        """Verify the library's scale band covers common window-size ratios.
+
+        The pipeline uses this wide band only for anchor calibration; once
+        the anchor pins the UI scale, the frame is normalized and items
+        match at a tight band around 1.0. So a wide band here is cheap and
+        desirable — it lets anchor calibration find the UI at any
+        reasonable window size (0.5× to 2×)."""
         assert len(library.scales) > 1, (
             f"Expected multiple scales for multi-scale matching, got {library.scales}"
         )
@@ -356,17 +359,12 @@ class TestTemplateLoading:
             "Scales must include 1.0 so a correctly-sized screenshot matches"
         )
         scales = sorted(library.scales)
-        assert scales[0] < 1.0 < scales[-1], (
-            f"Scale band should straddle 1.0 for tolerance both ways, got {scales}"
+        assert scales[0] <= 0.6, (
+            f"Minimum scale should be ≤0.6 so anchor calibration works on "
+            f"small/narrow windows; got {scales[0]}"
         )
-        # Keep the band tight enough that shrunk templates retain plenty of
-        # ORB features. 0.5x was the v2.3.0 value and caused regressions.
-        assert scales[0] >= 0.65, (
-            f"Minimum scale must stay at or above 0.65 to preserve "
-            f"ORB features on scaled templates; got {scales[0]}"
-        )
-        assert scales[-1] <= 1.5, (
-            f"Maximum scale must stay at or below 1.5; beyond that, "
-            f"template-matching noise dominates real signal; got {scales[-1]}"
+        assert scales[-1] >= 1.75, (
+            f"Maximum scale should be ≥1.75 so anchor calibration works on "
+            f"Retina/large windows; got {scales[-1]}"
         )
 

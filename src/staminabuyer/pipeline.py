@@ -154,26 +154,35 @@ class PipelineOptions:
     # Evony UI desaturates bought cards). Regular cards measure ~145, bought
     # ones ~35, so 80 leaves plenty of margin either way.
     bought_saturation_threshold: float = 80.0
-    # Conservative scale sweep. The templates were authored at roughly the
-    # user's preferred window size, so we only vary ±30%. Going wider creates
-    # templates small enough to fall below ``descriptor_min_matches``, which
-    # disables the ORB verification check and lets false positives through.
-    # If you need to match much smaller/larger windows, regenerate templates
-    # at that size rather than widening this band.
-    template_scales: tuple[float, ...] = (
-        0.70, 0.80, 0.90, 0.95, 1.00, 1.05, 1.10, 1.20, 1.30,
+    # Scale sweep used by anchor calibration. Wide by design — the anchor
+    # (refresh button) can appear anywhere from a tiny to a large window, and
+    # we need the sweep to find it. After calibration, the frame is resized
+    # so the UI matches template scale, and item matches use a tight band
+    # around 1.0 (see ``item_scale_tolerance``). So a wide sweep here is
+    # cheap: only the anchor is evaluated at every scale; items aren't.
+    template_scales: tuple[float, ...] = tuple(
+        round(0.50 + i * 0.05, 2) for i in range(31)  # 0.50 → 2.00 at 0.05 steps
     )
-    reference_width: int | None = None  # Legacy aspect-preserving rescale; rarely needed now.
+    reference_width: int | None = None  # Legacy aspect-preserving rescale; superseded by frame normalization.
     save_debug_screenshots: bool = False
     items_file: Path | None = None  # Optional path to items.yaml; None = bundled default.
-    # Anchor-based scale calibration runs every frame but is used for logging
-    # and "are we on the right screen?" sanity checks only. We intentionally
-    # do NOT narrow item matching to a band around the calibrated scale —
-    # doing so amplified miscalibration into wholesale false-positives /
-    # false-negatives in v2.3.0.
+    # Anchor-based scale calibration is the core of the resolution-agnostic
+    # matching pipeline: each frame is checked for an anchor icon, the
+    # frame is resized so the UI appears at canonical (template) scale, and
+    # then templates match at scale ≈ 1.0 with a small tolerance for
+    # calibration quantization.
     anchor_icons: tuple[str, ...] = ("refresh",)
     anchor_min_score: float = 0.6
-    scale_tolerance: float = 0.10  # Retained for tests / future use; currently unused in the runner.
+    # Tolerance around 1.0 for matching items *after* the frame has been
+    # normalized to canonical scale. Calibration snaps to the nearest
+    # configured scale step (0.05 above), so 0.08 gives plenty of headroom
+    # for residual error while still being tight enough to prevent the
+    # cross-card false positives that bit v2.3.0.
+    item_scale_tolerance: float = 0.08
+    # How long to wait before retrying when the anchor can't be found.
+    # Distinct from the button-match retry delay because "no anchor" usually
+    # means the emulator is mid-animation or on a different screen entirely.
+    wrong_screen_wait_seconds: float = 1.0
 
 
 @dataclass(slots=True)
@@ -436,14 +445,15 @@ class PipelineRunner:
     ) -> tuple[MatchResult, StaminaItem]:
         """Find the best available (un-purchased) stamina item, refreshing if needed.
 
-        Composes the smaller helpers below: capture (and opportunistically
-        log a calibrated UI scale) → score every item → pick the
-        highest-scoring *available* one (ignoring greyed-out cards by
-        saturation) → refresh and retry if nothing usable was found.
+        Every frame is anchor-calibrated; the detected UI scale is used to
+        normalize the frame so templates match at canonical (1.0) scale with
+        a small tolerance for calibration quantization. This makes the
+        pipeline genuinely resolution-agnostic: any window size within the
+        anchor sweep (0.5×–2.0× of template scale) works equivalently.
 
-        Calibration is informational only: we no longer filter item matches
-        by the calibrated scale, because a miscalibrated anchor used to
-        silently break every subsequent match (see v2.3.1 release notes).
+        When calibration fails we back off and wait rather than refresh —
+        tapping the refresh button on a screen that isn't the Black Market
+        would land on whatever happens to be there.
 
         Raises:
             RuntimeError: No available stamina item after exhausting refreshes.
@@ -452,8 +462,17 @@ class PipelineRunner:
             self._check_cancelled()
 
             frame = client.screencap()
-            self._calibrate_from_frame(frame)  # log-only
-            scores = self._score_items(frame)
+            calibrated_scale = self._calibrate_from_frame(frame)
+            if calibrated_scale is None:
+                self.console.log(
+                    "[yellow]⚠️ UI scale not detected — probably not on the "
+                    "Black Market screen, or the window is outside the "
+                    "supported size range. Waiting before retrying...[/yellow]"
+                )
+                time.sleep(self.options.wrong_screen_wait_seconds)
+                continue
+
+            scores = self._score_items(frame, frame_scale=calibrated_scale)
 
             selection = self._select_available_item(frame, scores)
             if selection is not None:
@@ -476,13 +495,17 @@ class PipelineRunner:
         raise RuntimeError("Failed to locate any stamina items")
 
     def _score_items(
-        self, frame: bytes
+        self, frame: bytes, frame_scale: float
     ) -> dict[str, tuple[float, MatchResult | None]]:
         """Return ``{template_name: (best_score, best_match)}`` for every item.
 
         Uses a low acceptance threshold so callers can see and log scores for
         items that narrowly missed, rather than silently getting empty lists.
-        Scans the full configured scale band — no anchor-derived filtering.
+        The frame is normalized to template (canonical) scale via
+        ``frame_scale``, and matching is restricted to a tight band around
+        1.0 — so each item does 1-3 correlations instead of the full sweep,
+        and cross-card false positives from extreme-scale variants cannot
+        occur by construction.
         """
         scores: dict[str, tuple[float, MatchResult | None]] = {}
         for item in self._items:
@@ -490,6 +513,9 @@ class PipelineRunner:
                 frame,
                 [item.template_name],
                 threshold=0.3,
+                frame_scale=frame_scale,
+                scale_hint=1.0,
+                scale_tolerance=self.options.item_scale_tolerance,
             )
             best = matches[0] if matches else None
             scores[item.template_name] = (best.score if best else 0.0, best)
@@ -556,18 +582,36 @@ class PipelineRunner:
         time.sleep(refresh_delay)
 
     def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
+        """Locate ``icon_name`` on the current screen, retrying on failure.
+
+        Each attempt re-captures the frame, re-calibrates the UI scale, and
+        runs a tight scale match in the normalized frame. A failed
+        calibration is treated as a soft failure (wait and retry); an
+        exhausted retry budget raises.
+        """
         if not self._templates.has_template(icon_name):
             raise RuntimeError(f"Template '{icon_name}' is not available in assets/icons.")
 
         for attempt in range(1, self.options.max_retries + 1):
             frame = client.screencap()
 
-            # Opportunistic calibration (logged only — not used as a filter,
-            # to avoid the v2.3.0 regression where a wrong anchor scale hid
-            # the real button).
-            self._calibrate_from_frame(frame)
+            calibrated_scale = self._calibrate_from_frame(frame)
+            if calibrated_scale is None:
+                self.console.log(
+                    f"[yellow]Attempt {attempt}/{self.options.max_retries}: "
+                    f"UI scale not detected while looking for '{icon_name}'. "
+                    f"Retrying after delay.[/yellow]"
+                )
+                self._sleep_with_jitter()
+                continue
 
-            matches = self._templates.match(frame, [icon_name])
+            matches = self._templates.match(
+                frame,
+                [icon_name],
+                frame_scale=calibrated_scale,
+                scale_hint=1.0,
+                scale_tolerance=self.options.item_scale_tolerance,
+            )
             if matches:
                 match = matches[0]
                 self.console.log(
@@ -581,7 +625,6 @@ class PipelineRunner:
                 f"no match for '{icon_name}', retrying after delay."
             )
 
-            # Save debug screenshot if enabled and this is the last attempt
             if self.options.save_debug_screenshots and attempt == self.options.max_retries:
                 self._save_debug_screenshot(frame, icon_name)
 

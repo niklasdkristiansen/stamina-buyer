@@ -200,14 +200,32 @@ class TemplateLibrary:
 
         return icon_name in self._templates
 
-    def _decode_frame(self, frame: bytes) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
-        """Decode a PNG/JPEG ``frame`` and optionally rescale to ``reference_width``.
+    def _decode_frame(
+        self,
+        frame: bytes,
+        frame_scale: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+        """Decode a PNG/JPEG ``frame`` and (optionally) normalize it to template scale.
+
+        Two normalization modes are supported:
+
+        - ``frame_scale`` (per-call, preferred): the UI in ``frame`` is rendered
+          at ``frame_scale`` relative to the templates. The frame is resized by
+          ``1/frame_scale`` so that the UI appears at canonical (template)
+          scale, and callers can then match at scale ≈ 1.0. This is the output
+          of :meth:`calibrate_scale` and produces reliable results at any
+          window size covered by the anchor sweep.
+        - ``reference_width`` (library-level, legacy): if set on the library,
+          frames are resized so their width equals ``reference_width``. Kept
+          for fixed-size deployments where anchor calibration is unavailable.
+
+        ``frame_scale`` takes precedence over ``reference_width`` when both are set.
 
         Returns:
-            ``(color_frame, prepared_frame, (scale_x, scale_y))``.
-            ``scale_x``/``scale_y`` are the ratios needed to map coordinates
-            from the (possibly resized) internal frame back to the original
-            screenshot. They are ``1.0, 1.0`` when no rescale happened.
+            ``(color_frame, prepared_frame, (scale_x, scale_y))`` where
+            ``(scale_x, scale_y)`` maps coordinates from the (possibly resized)
+            working frame back to the original screenshot. When no resize
+            happened, both values are ``1.0``.
         """
         array = np.frombuffer(frame, dtype=np.uint8)
         color_frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
@@ -217,6 +235,26 @@ class TemplateLibrary:
         orig_height, orig_width = color_frame.shape[:2]
         if self._console:
             self._console.log(f"[cyan]Screenshot: {orig_width}×{orig_height}[/cyan]")
+
+        if frame_scale is not None and frame_scale > 0 and abs(frame_scale - 1.0) > 1e-3:
+            # Resize the frame so the UI is at canonical (template) scale.
+            # Downscaling the frame by 1/S puts everything at ≈template size.
+            target_width = max(1, int(round(orig_width / frame_scale)))
+            target_height = max(1, int(round(orig_height / frame_scale)))
+            interpolation = cv2.INTER_AREA if frame_scale > 1.0 else cv2.INTER_CUBIC
+            color_frame = cv2.resize(
+                color_frame, (target_width, target_height), interpolation=interpolation
+            )
+            if self._console:
+                self._console.log(
+                    f"[cyan]Frame-normalized (UI scale {frame_scale:.3f}x): "
+                    f"{orig_width}×{orig_height} → {target_width}×{target_height}[/cyan]"
+                )
+            return (
+                color_frame,
+                self._prepare_frame(color_frame),
+                (orig_width / target_width, orig_height / target_height),
+            )
 
         if not self.reference_width or orig_width == self.reference_width:
             return color_frame, self._prepare_frame(color_frame), (1.0, 1.0)
@@ -270,6 +308,7 @@ class TemplateLibrary:
         nms_iou_threshold: float = 0.3,
         scale_hint: float | None = None,
         scale_tolerance: float = 0.05,
+        frame_scale: float | None = None,
     ) -> list[MatchResult]:
         """
         Match templates against a frame and return candidates sorted best-first.
@@ -282,10 +321,16 @@ class TemplateLibrary:
                 overlapping matches (same icon at adjacent scales, or different
                 icons landing on the same cell). Set to 1.0 to disable.
             scale_hint: If provided, only template variants within
-                ``scale_tolerance`` of this scale are evaluated. Used by the
-                pipeline after anchor calibration to avoid a full scale sweep.
+                ``scale_tolerance`` of this scale are evaluated. After
+                :meth:`calibrate_scale` + ``frame_scale`` normalization the UI
+                is at canonical scale, so callers typically pass ``1.0``.
             scale_tolerance: Relative tolerance around ``scale_hint`` (fraction,
                 not absolute). Ignored when ``scale_hint`` is None.
+            frame_scale: If provided, the frame is resized by ``1/frame_scale``
+                before matching so the UI appears at template (canonical)
+                scale. Match coordinates are automatically transformed back
+                into the original frame's coordinate space. Typically set to
+                the ``scale`` returned by :meth:`calibrate_scale`.
 
         Returns:
             Matches sorted by descending score. Overlapping matches (IoU above
@@ -293,7 +338,9 @@ class TemplateLibrary:
             the single best candidate.
         """
         effective_threshold = threshold if threshold is not None else self.threshold
-        color_frame, decoded, (scale_x, scale_y) = self._decode_frame(frame)
+        color_frame, decoded, (scale_x, scale_y) = self._decode_frame(
+            frame, frame_scale=frame_scale
+        )
         matches: list[MatchResult] = []
         best_score = 0.0
         best_icon = None
@@ -424,14 +471,14 @@ class TemplateLibrary:
         without needing a separate per-state template. Regular stamina cards
         measure ~145, purchased/desaturated ones ~35, so a threshold around
         80 cleanly separates the two.
+
+        The match's coordinates are in the *original* frame's space (match
+        returns coordinates post-denormalization), so we decode the frame
+        without any normalization here and index directly.
         """
-        color_frame, _, (scale_x, scale_y) = self._decode_frame(frame)
-        # match coordinates were returned in original-frame space, so convert
-        # them back into the decoded frame's space before indexing.
-        x1 = int(match.top_left[0] / scale_x) if scale_x else match.top_left[0]
-        y1 = int(match.top_left[1] / scale_y) if scale_y else match.top_left[1]
-        x2 = int(match.bottom_right[0] / scale_x) if scale_x else match.bottom_right[0]
-        y2 = int(match.bottom_right[1] / scale_y) if scale_y else match.bottom_right[1]
+        color_frame, _, _ = self._decode_frame(frame)
+        x1, y1 = match.top_left
+        x2, y2 = match.bottom_right
         x1 = max(0, x1)
         y1 = max(0, y1)
         x2 = min(color_frame.shape[1], x2)
