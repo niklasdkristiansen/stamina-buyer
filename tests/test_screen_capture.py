@@ -59,6 +59,37 @@ class TestWindowInfoCaching:
         assert fake_find.calls == 2, "explicit refresh must bypass TTL cache"
 
 
+class TestQuartzWindowLookup:
+    """The GUI passes list_windows()'s "Title (Owner)" names straight to the client."""
+
+    WINDOWS = [
+        {"kCGWindowName": "", "kCGWindowOwnerName": "BlueStacks", "kCGWindowLayer": 0,
+         "kCGWindowBounds": {"X": 0, "Y": 0, "Width": 1, "Height": 1}, "kCGWindowNumber": 7},
+        {"kCGWindowName": "BlueStacks", "kCGWindowOwnerName": "BlueStacks", "kCGWindowLayer": 0,
+         "kCGWindowBounds": {"X": 5, "Y": 6, "Width": 480, "Height": 870}, "kCGWindowNumber": 8},
+    ]
+
+    @pytest.fixture(autouse=True)
+    def _fake_quartz(self, monkeypatch):
+        monkeypatch.setattr(sc, "CGWindowListCopyWindowInfo", lambda *a: self.WINDOWS, raising=False)
+        monkeypatch.setattr(sc, "kCGWindowListOptionOnScreenOnly", 0, raising=False)
+        monkeypatch.setattr(sc, "kCGNullWindowID", 0, raising=False)
+
+    def _find(self, title: str) -> sc.WindowInfo:
+        from types import SimpleNamespace
+
+        return sc.ScreenCaptureClient._find_window_quartz(SimpleNamespace(window_title=title))
+
+    def test_display_name_from_list_windows_is_found(self):
+        info = self._find("BlueStacks (BlueStacks)")
+        assert (info.x, info.y, info.width, info.height) == (5, 6, 480, 870)
+        assert info.owner == "BlueStacks"
+
+    def test_partial_title_skips_tiny_helper_windows(self):
+        info = self._find("bluestacks")
+        assert info.handle == 8
+
+
 class TestImportErrorSurfacing:
     def test_construct_without_deps_surfaces_real_error(self, monkeypatch):
         monkeypatch.setattr(sc, "HAS_SCREEN_CAPTURE", False)

@@ -75,9 +75,17 @@ class WindowInfo:
     width: int
     height: int
     handle: int | None = None
+    owner: str | None = None  # Owning application name (macOS)
 
 
 DEFAULT_WINDOW_INFO_TTL_SECONDS = 1.5
+#: Windows this small are helper/overlay windows, never the emulator itself.
+MIN_WINDOW_DIMENSION = 100
+
+
+def _quartz_display_name(title: str, owner: str) -> str:
+    """Name shown by :func:`list_windows` (and so in the GUI) for a macOS window."""
+    return f"{title} ({owner})" if title and title.strip() else owner
 
 
 class ScreenCaptureClient:
@@ -119,7 +127,8 @@ class ScreenCaptureClient:
         self._window_info: WindowInfo | None = None
         self._window_info_fetched_at: float = 0.0
         self._window_info_ttl = max(0.0, window_info_ttl_seconds)
-        self._mss = mss.mss()
+        # mss >= 10 renamed the factory to MSS and deprecated mss.mss.
+        self._mss = getattr(mss, "MSS", mss.mss)()
         # DPI ratio between captured bitmap pixels (mss) and logical points
         # (pyautogui / window bounds). 2.0 on a Retina display, 1.0 on most
         # Windows setups. Populated lazily on first screencap().
@@ -167,9 +176,7 @@ class ScreenCaptureClient:
             # macOS: Use AppleScript to activate the application
             try:
                 import subprocess
-                # Get the owner name from the window info (it's stored in title if it's just the app name)
-                # or we need to query it again
-                app_name = self._window_info.title.split('(')[-1].rstrip(')') if '(' in self._window_info.title else self._window_info.title
+                app_name = (self._window_info.owner or self._window_info.title).replace('"', '\\"')
                 script = f'tell application "{app_name}" to activate'
                 subprocess.run(['osascript', '-e', script], check=False, capture_output=True)
                 time.sleep(0.3)  # Give window time to come to front
@@ -206,21 +213,23 @@ class ScreenCaptureClient:
         search_term = self.window_title.lower()
 
         for window in window_list:
-            title = window.get('kCGWindowName', '')
-            owner = window.get('kCGWindowOwnerName', '')
+            title = window.get('kCGWindowName', '') or ''
+            owner = window.get('kCGWindowOwnerName', '') or ''
             layer = window.get('kCGWindowLayer', 0)
             bounds = window.get('kCGWindowBounds', {})
 
-            # Only consider normal windows (layer 0)
+            # Only consider normal, reasonably sized windows (same filter as list_windows)
             if layer != 0:
                 continue
+            if bounds.get('Width', 0) <= MIN_WINDOW_DIMENSION or bounds.get('Height', 0) <= MIN_WINDOW_DIMENSION:
+                continue
 
-            # Check if title or owner matches
-            title_matches = search_term in title.lower() if title else False
-            owner_matches = search_term in owner.lower() if owner else False
-
-            if title_matches or owner_matches:
-                matching_windows.append((window, title, owner, bounds))
+            # The GUI passes list_windows()'s "Title (Owner)" display name, so
+            # match against that as well as the raw title and owner.
+            display = _quartz_display_name(title, owner)
+            if any(search_term in candidate.lower() for candidate in (title, owner, display) if candidate):
+                exact = display.lower() == search_term
+                matching_windows.append((not exact, window, title, owner, bounds))
 
         if not matching_windows:
             raise RuntimeError(
@@ -228,8 +237,9 @@ class ScreenCaptureClient:
                 f"Make sure the emulator window is open and visible."
             )
 
-        # Use the first matching window
-        window, title, owner, bounds = matching_windows[0]
+        # Prefer an exact display-name match, otherwise the frontmost match.
+        matching_windows.sort(key=lambda entry: entry[0])
+        _, window, title, owner, bounds = matching_windows[0]
 
         # Extract position and size from bounds
         x = int(bounds.get('X', 0))
@@ -244,6 +254,7 @@ class ScreenCaptureClient:
             width=width,
             height=height,
             handle=window.get('kCGWindowNumber'),
+            owner=owner or None,
         )
 
     def _find_window_win32(self) -> WindowInfo:
@@ -434,11 +445,10 @@ def list_windows() -> list[str]:
             height = bounds.get('Height', 0)
 
             # Only include normal windows (layer 0) that are reasonably sized
-            if layer == 0 and owner and width > 100 and height > 100:
+            if layer == 0 and owner and width > MIN_WINDOW_DIMENSION and height > MIN_WINDOW_DIMENSION:
                 # If window has a title, use it
                 if title and title.strip():
-                    window_display = f"{title} ({owner})"
-                    windows.append(window_display)
+                    windows.append(_quartz_display_name(title, owner))
                 # Otherwise, use just the app name (but only once per app)
                 elif owner not in seen_apps:
                     windows.append(owner)
@@ -450,14 +460,14 @@ def list_windows() -> list[str]:
         error_msg = (
             f"Window listing not available on this platform ({sys.platform}). "
         )
-        if 'WIN32_IMPORT_ERROR' in globals():
+        if sys.platform == "win32":
             error_msg += f"\nWin32 import error: {WIN32_IMPORT_ERROR}"
             error_msg += "\nInstall pywin32: pip install pywin32"
-        elif 'QUARTZ_IMPORT_ERROR' in globals():
+        elif sys.platform == "darwin":
             error_msg += f"\nQuartz import error: {QUARTZ_IMPORT_ERROR}"
             error_msg += "\nInstall pyobjc: pip install pyobjc-framework-Quartz"
         else:
-            error_msg += "\nManually specify your emulator window title."
+            error_msg += "\nOnly Windows and macOS are supported."
         raise RuntimeError(error_msg)
 
 
@@ -520,13 +530,12 @@ def list_windows_debug() -> tuple[list[str], dict[str, Any]]:
                 width = bounds.get('Width', 0)
                 height = bounds.get('Height', 0)
 
-                if layer == 0 and width > 100 and height > 100:
+                if layer == 0 and width > MIN_WINDOW_DIMENSION and height > MIN_WINDOW_DIMENSION:
                     stats["visible"] += 1
 
                     if title and title.strip():
                         stats["with_title"] += 1
-                        window_display = f"{title} ({owner})"
-                        windows.append(window_display)
+                        windows.append(_quartz_display_name(title, owner))
                     elif owner and owner not in seen_apps:
                         stats["with_title"] += 1
                         windows.append(owner)

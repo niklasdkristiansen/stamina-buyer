@@ -288,3 +288,149 @@ class TestFullLoopDispatch:
         assert purchased == 500
         assert attempts["find"] == 2  # retried after the missing dialog
         assert attempts["confirm"] == 2
+
+    def test_gives_up_after_repeated_confirm_misses(self, monkeypatch):
+        """Regression: a gem-button tap that always misses used to loop forever."""
+        target = EmulatorTarget(name="w", stamina=500)
+        runner = _make_runner(max_confirm_misses=3)
+        client = MagicMock()
+        finds = {"n": 0}
+
+        def fake_find(c):
+            finds["n"] += 1
+            return _fake_match(), StaminaItem("stamina_10", 500)
+
+        def no_dialog(c, name):
+            raise RuntimeError("no confirm")
+
+        monkeypatch.setattr(runner, "_find_stamina_with_refresh", fake_find)
+        monkeypatch.setattr(runner, "_tap_gem_button", lambda c, m: None)
+        monkeypatch.setattr(runner, "_match_with_retry", no_dialog)
+
+        with pytest.raises(RuntimeError, match="3 times in a row"):
+            runner._execute_purchase_loop(client, target)
+        assert finds["n"] == 3
+
+    def test_successful_confirm_resets_miss_counter(self, client, context, monkeypatch):
+        runner = _make_runner(max_confirm_misses=2)
+        context.consecutive_confirm_misses = 1
+        monkeypatch.setattr(runner, "_match_with_retry", lambda c, name: _fake_match("to_confirm"))
+        monkeypatch.setattr(runner, "_tap_center", lambda c, m: None)
+
+        runner._state_confirm(client, context)
+
+        assert context.consecutive_confirm_misses == 0
+
+
+class TestProcessTarget:
+    def test_partial_purchases_survive_a_later_error(self, monkeypatch):
+        """Regression: an error after some purchases used to report 0 purchased."""
+        target = EmulatorTarget(name="w", stamina=1000)
+        client = MagicMock()
+        runner = _make_runner()
+        runner._client_factory = lambda title: client
+        finds = {"n": 0}
+
+        def fake_find(c):
+            finds["n"] += 1
+            if finds["n"] > 1:
+                raise RuntimeError("Failed to locate any stamina items")
+            return _fake_match(), StaminaItem("stamina_10", 500)
+
+        monkeypatch.setattr(runner, "_find_stamina_with_refresh", fake_find)
+        monkeypatch.setattr(runner, "_tap_gem_button", lambda c, m: None)
+        monkeypatch.setattr(runner, "_tap_center", lambda c, m: None)
+        monkeypatch.setattr(runner, "_match_with_retry", lambda c, name: _fake_match("to_confirm"))
+
+        result = runner._process_target(target)
+
+        assert result.purchased == 500
+        assert result.errors == ["Failed to locate any stamina items"]
+        assert not result.successful
+
+    def test_cancellation_propagates_instead_of_becoming_an_error(self, monkeypatch):
+        """Regression: CancelledError was swallowed into result.errors, so the
+        GUI never saw the cancellation and reset progress to 0."""
+        runner = _make_runner()
+        runner._client_factory = lambda title: MagicMock()
+
+        def cancelled(c):
+            raise CancelledError("Operation cancelled by user")
+
+        monkeypatch.setattr(runner, "_find_stamina_with_refresh", cancelled)
+
+        with pytest.raises(CancelledError):
+            runner._process_target(EmulatorTarget(name="w", stamina=500))
+
+    def test_client_factory_failure_is_reported_not_raised(self):
+        runner = _make_runner()
+
+        def broken_factory(title):
+            raise RuntimeError("Screen capture dependencies not available")
+
+        runner._client_factory = broken_factory
+        result = runner._process_target(EmulatorTarget(name="w", stamina=500))
+
+        assert result.purchased == 0
+        assert "Screen capture dependencies" in result.errors[0]
+
+
+class TestRefreshWait:
+    def _prepare(self, runner, monkeypatch):
+        taps: list[MatchResult] = []
+        monkeypatch.setattr(runner, "_match_with_retry", lambda c, name: _fake_match("refresh"))
+        monkeypatch.setattr(runner, "_tap_center", lambda c, m: taps.append(m))
+        return taps
+
+    def test_fixed_wait_sleeps_configured_seconds(self, client, monkeypatch):
+        runner = _make_runner(auto_settle=False, refresh_wait_seconds=2.5)
+        taps = self._prepare(runner, monkeypatch)
+        sleeps: list[float] = []
+        monkeypatch.setattr("staminabuyer.pipeline.time.sleep", sleeps.append)
+
+        runner._refresh_market(client)
+
+        assert len(taps) == 1
+        assert sleeps == [2.5]
+        client.screencap.assert_not_called()
+
+    def test_auto_settle_samples_before_tap_and_waits_for_settle(self, client, monkeypatch):
+        from staminabuyer.settle import SettleResult
+
+        runner = _make_runner(auto_settle=True, refresh_wait_seconds=1.5)
+        events: list[str] = []
+        monkeypatch.setattr(runner, "_match_with_retry", lambda c, name: _fake_match("refresh"))
+        monkeypatch.setattr(runner, "_tap_center", lambda c, m: events.append("tap"))
+
+        baseline = object()
+        waits: list[tuple] = []
+
+        class FakeSettler:
+            def capture_baseline(self, capture):
+                events.append("baseline")
+                return baseline
+
+            def wait(self, capture, got_baseline, min_wait, label, on_poll=None):
+                events.append("wait")
+                waits.append((got_baseline, min_wait, label))
+                return SettleResult(waited=2.0, changed=True, settled=True)
+
+            def average(self, label):
+                return 2.0
+
+        runner._settler = FakeSettler()
+        runner._refresh_market(client)
+
+        assert events == ["baseline", "tap", "wait"]
+        assert waits == [(baseline, 1.5, "refresh")]
+
+    def test_auto_settle_falls_back_to_fixed_wait_on_undecodable_frames(self, client, monkeypatch):
+        """MagicMock frames can't be decoded — the runner must still wait, not crash."""
+        runner = _make_runner(auto_settle=True, refresh_wait_seconds=1.25)
+        self._prepare(runner, monkeypatch)
+        sleeps: list[float] = []
+        monkeypatch.setattr("staminabuyer.pipeline.time.sleep", sleeps.append)
+
+        runner._refresh_market(client)
+
+        assert sleeps == [1.25]

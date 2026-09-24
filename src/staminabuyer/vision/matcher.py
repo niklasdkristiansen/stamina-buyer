@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +14,23 @@ import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from rich.console import Console
+
+#: Predicted UI scales above this are handled by downscaling the frame
+#: before calibration rather than by upscaling templates, which past ~2x
+#: stop matching reliably and start producing false anchors.
+PRESCALE_ABOVE = 1.5
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def frame_size(frame: bytes) -> tuple[int, int]:
+    """Return ``(width, height)`` of an encoded frame (header-only for PNGs)."""
+    if frame[:8] == _PNG_SIGNATURE and len(frame) >= 24:
+        return int.from_bytes(frame[16:20], "big"), int.from_bytes(frame[20:24], "big")
+    image = cv2.imdecode(np.frombuffer(frame, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError("Unable to decode framebuffer for matching.")
+    return image.shape[1], image.shape[0]
 
 
 def get_assets_path() -> Path:
@@ -51,7 +68,7 @@ def _within_tolerance(value: float, target: float, relative_tolerance: float) ->
     return abs(value - target) / target <= relative_tolerance
 
 
-def _iou(a: "MatchResult", b: "MatchResult") -> float:
+def _iou(a: MatchResult, b: MatchResult) -> float:
     """Intersection-over-Union of two MatchResult bboxes."""
     ax1, ay1 = a.top_left
     ax2, ay2 = a.bottom_right
@@ -72,7 +89,7 @@ def _iou(a: "MatchResult", b: "MatchResult") -> float:
     return inter_area / union if union > 0 else 0.0
 
 
-def _non_max_suppress(matches: list["MatchResult"], iou_threshold: float) -> list["MatchResult"]:
+def _non_max_suppress(matches: list[MatchResult], iou_threshold: float) -> list[MatchResult]:
     """Greedy NMS: keep highest-scoring match, drop overlaps above the threshold.
 
     Assumes ``matches`` is already sorted by descending score.
@@ -105,7 +122,7 @@ class TemplateLibrary:
         grayscale: bool = True,
         descriptor_ratio: float = 0.75,
         descriptor_min_matches: int = 10,
-        console: "Console | None" = None,
+        console: Console | None = None,
         reference_width: int | None = None,
     ) -> None:
         """Create a template library.
@@ -233,8 +250,6 @@ class TemplateLibrary:
             raise ValueError("Unable to decode framebuffer for matching.")
 
         orig_height, orig_width = color_frame.shape[:2]
-        if self._console:
-            self._console.log(f"[cyan]Screenshot: {orig_width}×{orig_height}[/cyan]")
 
         if frame_scale is not None and frame_scale > 0 and abs(frame_scale - 1.0) > 1e-3:
             # Resize the frame so the UI is at canonical (template) scale.
@@ -245,11 +260,10 @@ class TemplateLibrary:
             color_frame = cv2.resize(
                 color_frame, (target_width, target_height), interpolation=interpolation
             )
-            if self._console:
-                self._console.log(
-                    f"[cyan]Frame-normalized (UI scale {frame_scale:.3f}x): "
-                    f"{orig_width}×{orig_height} → {target_width}×{target_height}[/cyan]"
-                )
+            self._logger.debug(
+                "Frame-normalized (UI scale %.3fx): %d×%d → %d×%d",
+                frame_scale, orig_width, orig_height, target_width, target_height,
+            )
             return (
                 color_frame,
                 self._prepare_frame(color_frame),
@@ -270,11 +284,10 @@ class TemplateLibrary:
             (target_width, target_height),
             interpolation=cv2.INTER_AREA if scale_factor < 1.0 else cv2.INTER_CUBIC,
         )
-        if self._console:
-            self._console.log(
-                f"[cyan]Normalized to reference width: {orig_width}×{orig_height} → "
-                f"{target_width}×{target_height} (scale: {scale_factor:.3f}x)[/cyan]"
-            )
+        self._logger.debug(
+            "Normalized to reference width: %d×%d → %d×%d (scale: %.3fx)",
+            orig_width, orig_height, target_width, target_height, scale_factor,
+        )
         return (
             color_frame,
             self._prepare_frame(color_frame),
@@ -437,13 +450,15 @@ class TemplateLibrary:
         frame: bytes,
         anchor_icons: Sequence[str],
         min_score: float = 0.6,
+        reference_frame_size: tuple[int, int] | None = None,
+        scale_tolerance: float = 0.5,
+        anchor_region: tuple[float, float, float, float] | None = None,
     ) -> MatchResult | None:
         """Find the best-scoring anchor match in ``frame`` to calibrate scale.
 
         The returned match's ``scale`` is the factor the UI is rendered at
         relative to the stored templates. Feed it back into :meth:`match` via
-        ``scale_hint`` to match subsequent icons efficiently and without a
-        wide multi-scale sweep.
+        ``frame_scale`` to match subsequent icons at canonical scale.
 
         Args:
             frame: Screenshot bytes.
@@ -452,17 +467,53 @@ class TemplateLibrary:
                 chrome like the "refresh" button that only appears on the
                 target screen.
             min_score: Minimum correlation score required to trust the match.
+            reference_frame_size: ``(width, height)`` of the captures the
+                templates were cut from. When set, the UI scale is predicted
+                from the frame size (the UI fills whichever dimension limits
+                it), candidates outside ``scale_tolerance`` of the prediction
+                are ignored, and frames predicted above
+                :data:`PRESCALE_ABOVE` are downscaled first so that windows of
+                any size fit the template sweep.
+            scale_tolerance: Relative tolerance around the predicted scale.
+            anchor_region: ``(x0, y0, x1, y1)`` fractions of the frame the
+                anchor's centre must fall within.
 
         Returns:
             The best anchor MatchResult, or ``None`` if no anchor was
             confident enough. Callers should treat ``None`` as "probably on
             the wrong screen".
         """
-        # We intentionally do NOT pass scale_hint here; this is the calibration step.
-        matches = self.match(frame, anchor_icons, threshold=min_score)
+        width, height = frame_size(frame)
+        prescale: float | None = None
+        scale_hint: float | None = None
+        if reference_frame_size:
+            ref_width, ref_height = reference_frame_size
+            expected = min(width / ref_width, height / ref_height)
+            if expected > PRESCALE_ABOVE:
+                prescale = expected
+            scale_hint = expected / (prescale or 1.0)
+
+        matches = self.match(
+            frame,
+            anchor_icons,
+            threshold=min_score,
+            frame_scale=prescale,
+            scale_hint=scale_hint,
+            scale_tolerance=scale_tolerance,
+        )
+        if anchor_region:
+            x0, y0, x1, y1 = anchor_region
+            matches = [
+                m for m in matches
+                if x0 <= (m.top_left[0] + m.bottom_right[0]) / 2 / width <= x1
+                and y0 <= (m.top_left[1] + m.bottom_right[1]) / 2 / height <= y1
+            ]
         if not matches:
             return None
-        return matches[0]
+        best = matches[0]
+        if prescale:
+            best = replace(best, scale=best.scale * prescale)
+        return best
 
     def mean_saturation(self, frame: bytes, match: MatchResult) -> float:
         """Return the mean HSV saturation of the match's ROI in the decoded frame.

@@ -10,8 +10,8 @@ This provides the best user experience:
 - Run from terminal with args → CLI mode
 """
 
-import sys
 import os
+import sys
 
 # Ensure the src directory is in the path
 if getattr(sys, 'frozen', False):

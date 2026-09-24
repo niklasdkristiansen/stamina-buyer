@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import pytest
 
-from staminabuyer.vision.matcher import TemplateLibrary, _within_tolerance
+from staminabuyer.vision.matcher import TemplateLibrary, _within_tolerance, frame_size
 
 ASSETS_DIR = Path(__file__).parent.parent / "assets" / "icons"
 
@@ -62,6 +62,16 @@ class TestWithinTolerance:
     def test_nonpositive_target_is_false(self):
         assert not _within_tolerance(0.5, 0.0, 0.1)
         assert not _within_tolerance(0.5, -1.0, 0.1)
+
+
+class TestFrameSize:
+    def test_png_size_read_from_header(self):
+        png = cv2.imencode(".png", np.zeros((37, 53, 3), np.uint8))[1].tobytes()
+        assert frame_size(png) == (53, 37)
+
+    def test_non_png_falls_back_to_decoding(self):
+        jpg = cv2.imencode(".jpg", np.zeros((37, 53, 3), np.uint8))[1].tobytes()
+        assert frame_size(jpg) == (53, 37)
 
 
 class TestCalibrateScale:
@@ -232,7 +242,6 @@ class TestPipelineCalibrationIntegration:
         # template-scale working frame (catches a whole class of "forgot to
         # denormalize coordinates" bugs).
         import cv2 as _cv2
-
         import numpy as _np
 
         frame_img = _cv2.imdecode(
@@ -250,6 +259,69 @@ class TestPipelineCalibrationIntegration:
             assert 0 <= y1 < y2 <= frame_h, (
                 f"match y-coords {y1}-{y2} outside rescaled frame height {frame_h}"
             )
+
+    @pytest.mark.parametrize("factor", [2.35, 3.0, 4.0, 5.6])
+    def test_large_windows_calibrate_and_find_items(self, factor):
+        """Regression: captures wider than ~750px (e.g. any window over ~375pt
+        on Retina) used to miss the anchor or lock onto a false one at 0.40x."""
+        base = ASSETS_DIR / "screenshot-bm.png"
+        if not base.exists():
+            pytest.skip(f"missing {base}")
+        native = base.read_bytes()
+        frame = _rescale_png(base, factor)
+        runner, _ = self._build_runner([frame])
+
+        native_scale = runner._calibrate_from_frame(native)
+        native_pick = runner._select_available_item(
+            native, runner._score_items(native, frame_scale=native_scale)
+        )
+        calibrated = runner._calibrate_from_frame(frame)
+
+        assert calibrated is not None
+        assert abs(calibrated - factor) / factor <= 0.03
+        pick = runner._select_available_item(frame, runner._score_items(frame, frame_scale=calibrated))
+        assert pick is not None and pick[1].template_name == "stamina_10"
+        # Same card as at native size, just scaled up.
+        assert abs(pick[0].top_left[0] - native_pick[0].top_left[0] * factor) <= 3 * factor
+        assert abs(pick[0].top_left[1] - native_pick[0].top_left[1] * factor) <= 3 * factor
+
+    def test_landscape_window_with_centred_portrait_game(self):
+        """The UI scale follows the limiting dimension, so a pillarboxed
+        portrait game in a wide window still calibrates."""
+        base = ASSETS_DIR / "screenshot-bm.png"
+        if not base.exists():
+            pytest.skip(f"missing {base}")
+        game = cv2.imdecode(np.frombuffer(_rescale_png(base, 2.0), np.uint8), cv2.IMREAD_COLOR)
+        h, w = game.shape[:2]
+        canvas = np.zeros((h, w * 3, 3), np.uint8)
+        canvas[:, w : 2 * w] = game
+        frame = cv2.imencode(".png", canvas)[1].tobytes()
+        runner, _ = self._build_runner([frame])
+
+        calibrated = runner._calibrate_from_frame(frame)
+
+        assert calibrated is not None and abs(calibrated - 2.0) <= 0.06
+        pick = runner._select_available_item(frame, runner._score_items(frame, frame_scale=calibrated))
+        assert pick is not None and w <= pick[0].top_left[0] < 2 * w
+
+    def test_anchor_outside_expected_region_is_rejected(self):
+        """A refresh-like match near the top of the screen is not the Black
+        Market's refresh button, so calibration must not trust it."""
+        base = ASSETS_DIR / "screenshot-bm.png"
+        if not base.exists():
+            pytest.skip(f"missing {base}")
+        image = cv2.imread(str(base))
+        runner, _ = self._build_runner([base.read_bytes()])
+        anchor = runner._templates.calibrate_scale(base.read_bytes(), ["refresh"], min_score=0.6)
+        (x1, y1), (x2, y2) = anchor.top_left, anchor.bottom_right
+        button = image[y1:y2, x1:x2].copy()
+        image[y1:y2, x1:x2] = image[y1 - 40 : y2 - 40, x1:x2]  # paint over with nearby background
+        image[40 : 40 + (y2 - y1), x1:x2] = button
+        frame = cv2.imencode(".png", image)[1].tobytes()
+
+        assert runner._calibrate_from_frame(frame) is None
+        runner.options.anchor_region = None
+        assert runner._calibrate_from_frame(frame) is not None
 
     def test_wrong_screen_returns_none_calibration(self):
         """If the captured frame doesn't contain the anchor, calibration

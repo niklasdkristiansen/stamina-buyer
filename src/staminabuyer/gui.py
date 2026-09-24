@@ -19,10 +19,13 @@ from typing import Any
 
 try:
     import customtkinter as ctk
-    
-    HAS_GUI_DEPS = True
-except ImportError:
-    HAS_GUI_DEPS = False
+except ImportError as exc:
+    # The widget classes below subclass ctk types at import time, so fail
+    # here with an ImportError callers can catch rather than a NameError.
+    raise ImportError(
+        f"GUI dependencies unavailable ({exc}). Install customtkinter and use a "
+        f"Python build with Tk support."
+    ) from exc
 
 from rich.console import Console
 
@@ -70,6 +73,36 @@ def _load_targets() -> list[dict]:
     except Exception:
         pass
     return []
+
+
+def _save_settings(settings: dict[str, Any]) -> None:
+    """Persist GUI run settings (refresh wait etc.) between sessions."""
+    try:
+        with open(_get_config_dir() / "settings.json", "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception:
+        pass
+
+
+def _load_settings() -> dict[str, Any]:
+    """Load GUI run settings, falling back to pipeline defaults."""
+    defaults = PipelineOptions()
+    settings: dict[str, Any] = {
+        "refresh_wait_seconds": defaults.refresh_wait_seconds,
+        "auto_settle": defaults.auto_settle,
+    }
+    try:
+        settings_file = _get_config_dir() / "settings.json"
+        if settings_file.exists():
+            with open(settings_file) as f:
+                saved = json.load(f)
+            if isinstance(saved.get("refresh_wait_seconds"), (int, float)):
+                settings["refresh_wait_seconds"] = max(0.0, float(saved["refresh_wait_seconds"]))
+            if isinstance(saved.get("auto_settle"), bool):
+                settings["auto_settle"] = saved["auto_settle"]
+    except Exception:
+        pass
+    return settings
 
 
 class LogCapture:
@@ -419,6 +452,31 @@ class StaminaBuyerGUI(ctk.CTk):
             state="disabled"
         )
         
+        # Refresh wait settings
+        settings = _load_settings()
+        self.settings_row = ctk.CTkFrame(self.run_frame, fg_color="transparent")
+        self.refresh_wait_label = ctk.CTkLabel(
+            self.settings_row,
+            text="Refresh wait (s):",
+            font=ctk.CTkFont(size=12)
+        )
+        self.refresh_wait_entry = ctk.CTkEntry(
+            self.settings_row,
+            width=50,
+            height=26,
+            justify="right"
+        )
+        self.refresh_wait_entry.insert(0, f"{settings['refresh_wait_seconds']:g}")
+        self.auto_settle_var = ctk.BooleanVar(value=settings["auto_settle"])
+        self.auto_settle_checkbox = ctk.CTkCheckBox(
+            self.settings_row,
+            text="Auto: then wait until the screen settles",
+            variable=self.auto_settle_var,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        
         # === Progress Frame ===
         self.progress_frame = ctk.CTkFrame(self.main_scroll)
         self.progress_frame_label = ctk.CTkLabel(
@@ -491,6 +549,11 @@ class StaminaBuyerGUI(ctk.CTk):
         self.run_frame_label.grid(row=0, column=0, padx=8, pady=6, sticky="w")
         self.run_button.grid(row=0, column=1, padx=2, pady=6)
         self.cancel_button.grid(row=0, column=2, padx=(2, 8), pady=6)
+        
+        self.settings_row.grid(row=1, column=0, columnspan=3, padx=8, pady=(0, 6), sticky="w")
+        self.refresh_wait_label.pack(side="left", padx=(0, 4))
+        self.refresh_wait_entry.pack(side="left", padx=(0, 8))
+        self.auto_settle_checkbox.pack(side="left")
         
         # === Progress Frame (compact) ===
         self.progress_frame.pack(fill="x", padx=8, pady=2)
@@ -595,6 +658,8 @@ class StaminaBuyerGUI(ctk.CTk):
     
     def _update_target_stamina(self, target_name: str, new_stamina: int):
         """Update stamina for a target."""
+        if self.is_running:
+            return
         for t in self.targets:
             if t["name"] == target_name:
                 t["stamina"] = new_stamina
@@ -602,6 +667,9 @@ class StaminaBuyerGUI(ctk.CTk):
     
     def _remove_target(self, target_name: str):
         """Remove a target from the list."""
+        if self.is_running:
+            self._log("⚠️ Can't remove targets while running")
+            return
         self.targets = [t for t in self.targets if t["name"] != target_name]
         self._update_targets_display()
     
@@ -645,6 +713,19 @@ class StaminaBuyerGUI(ctk.CTk):
             self._log("⚠️ Already running!")
             return
         
+        try:
+            refresh_wait = float(self.refresh_wait_entry.get().strip())
+            if refresh_wait < 0:
+                raise ValueError
+        except ValueError:
+            self._log("⚠️ Refresh wait must be a number of seconds (e.g. 1.5)")
+            return
+        settings = {
+            "refresh_wait_seconds": refresh_wait,
+            "auto_settle": bool(self.auto_settle_var.get()),
+        }
+        _save_settings(settings)
+        
         # Sync any pending edits from the UI
         self._sync_target_values()
         
@@ -658,11 +739,17 @@ class StaminaBuyerGUI(ctk.CTk):
         
         self._log(f"\n{'='*50}")
         self._log("🚀 Starting stamina purchases...")
+        if settings["auto_settle"]:
+            self._log(f"⏱️ Refresh wait: at least {refresh_wait:g}s, then until the screen settles")
+        else:
+            self._log(f"⏱️ Refresh wait: fixed {refresh_wait:g}s")
         self._log(f"{'='*50}\n")
         
-        # Run in background thread
+        # Run in background thread on a snapshot, so the worker never reads
+        # Tk widgets or a target list the user is editing.
         thread = threading.Thread(
             target=self._execute_pipeline,
+            args=([dict(t) for t in self.targets], settings),
             daemon=True
         )
         thread.start()
@@ -711,21 +798,32 @@ class StaminaBuyerGUI(ctk.CTk):
             # Rebuild the display to fix indices
             self._setup_progress_display()
     
-    def _execute_pipeline(self):
+    def _execute_pipeline(self, targets: list[dict[str, Any]], settings: dict[str, Any]):
         """Execute the pipeline (runs in background thread)."""
         try:
-            from .pipeline import CancelledError, PipelineResult
+            from .pipeline import CancelledError, PipelineResult, build_template_library
             
             # Redirect logs to GUI
             console = Console(file=LogCapture(self.log_queue), force_terminal=False)
             
             results: list[PipelineResult] = []
+            options = PipelineOptions(
+                dry_run=False,
+                max_retries=3,
+                post_purchase_delay_seconds=1.0,
+                post_click_delay_seconds=1.0,
+                max_refreshes=100,
+                reference_width=DEFAULT_REFERENCE_WIDTH,
+                refresh_wait_seconds=settings["refresh_wait_seconds"],
+                auto_settle=settings["auto_settle"],
+            )
+            templates = build_template_library(options, console)
             
-            for i, target in enumerate(self.targets):
+            for i, target in enumerate(targets):
                 if self.cancel_requested:
-                    self._log("⏹️ Skipping remaining targets")
                     # Mark remaining as cancelled
-                    for j in range(i, len(self.targets)):
+                    self.log_queue.put(("log", "⏹️ Skipping remaining targets"))
+                    for j in range(i, len(targets)):
                         self.log_queue.put(("target_cancelled", j))
                     break
                 
@@ -733,16 +831,6 @@ class StaminaBuyerGUI(ctk.CTk):
                 self.log_queue.put(("target_active", i))
                 
                 emulator_target = EmulatorTarget(name=target["name"], stamina=target["stamina"])
-                
-                # Create options
-                options = PipelineOptions(
-                    dry_run=False,
-                    max_retries=3,
-                    post_purchase_delay_seconds=1.0,
-                    post_click_delay_seconds=1.0,
-                    max_refreshes=100,
-                    reference_width=DEFAULT_REFERENCE_WIDTH,
-                )
                 
                 # Progress callback to update UI in real-time
                 # Use default argument to capture current value of i (not reference)
@@ -756,6 +844,7 @@ class StaminaBuyerGUI(ctk.CTk):
                 runner = PipelineRunner(
                     options=options,
                     console=console,
+                    template_library=templates,
                     progress_callback=on_progress,
                     cancel_callback=should_cancel,
                 )
@@ -771,12 +860,12 @@ class StaminaBuyerGUI(ctk.CTk):
                 except CancelledError:
                     self.log_queue.put(("target_cancelled", i))
                     # Mark remaining as cancelled too
-                    for j in range(i + 1, len(self.targets)):
+                    for j in range(i + 1, len(targets)):
                         self.log_queue.put(("target_cancelled", j))
                     break
                     
                 except Exception as e:
-                    self._log(f"❌ Error on {target['name']}: {e}")
+                    self.log_queue.put(("log", f"❌ Error on {target['name']}: {e}"))
                     self.log_queue.put(("target_complete", (i, False)))
             
             self.log_queue.put(("complete", results))
@@ -866,6 +955,8 @@ class StaminaBuyerGUI(ctk.CTk):
         self.add_target_button.configure(state="disabled")
         self.load_last_button.configure(state="disabled")
         self.run_button.configure(state="disabled")
+        self.refresh_wait_entry.configure(state="disabled")
+        self.auto_settle_checkbox.configure(state="disabled")
         self.cancel_button.configure(state="normal", text="⏹️ Cancel")
     
     def _enable_controls(self):
@@ -874,16 +965,13 @@ class StaminaBuyerGUI(ctk.CTk):
         self.add_target_button.configure(state="normal")
         self.load_last_button.configure(state="normal")
         self.run_button.configure(state="normal")
+        self.refresh_wait_entry.configure(state="normal")
+        self.auto_settle_checkbox.configure(state="normal")
         self.cancel_button.configure(state="disabled", text="⏹️ Cancel")
 
 
 def launch_gui():
     """Launch the GUI application."""
-    if not HAS_GUI_DEPS:
-        print("GUI dependencies not installed.")
-        print("Install with: pip install customtkinter pillow")
-        sys.exit(1)
-    
     app = StaminaBuyerGUI()
     app.mainloop()
 

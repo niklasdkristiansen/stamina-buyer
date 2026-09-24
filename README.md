@@ -15,7 +15,7 @@ download it, double-click, and watch it buy stamina.
 - 🖥️ **Works with any emulator** — BlueStacks, LDPlayer, NoxPlayer, MEmu, MuMu, …
 - 📐 **Resolution-agnostic** — anchor-based UI scale calibration + Retina/DPI click correction, so arbitrary window sizes and 2× displays work out of the box
 - 🧠 **Never re-buys** — greyed-out cards are detected automatically and skipped
-- 🔁 **Auto-refresh** — refreshes the Black Market until the requested stamina is reached
+- 🔁 **Auto-refresh** — refreshes the Black Market until the requested stamina is reached, waiting for the new cards to finish loading before reading them
 - 🚀 **Multi-instance** — queue up several emulators in one run
 
 ## Download
@@ -71,7 +71,7 @@ the recommended path for everyone else.
 
 - [QUICKSTART.md](QUICKSTART.md) — user guide (GUI + CLI)
 - [DISTRIBUTION.md](DISTRIBUTION.md) — packaging & release mechanics
-- `pytest -q` — 84 tests, ~24s on a laptop
+- `pytest -q` — runs the test suite (about a minute on a laptop)
 
 ## License
 

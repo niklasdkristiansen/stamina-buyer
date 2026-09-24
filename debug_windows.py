@@ -28,7 +28,7 @@ if sys.platform == 'win32':
     HAS_QUARTZ = False
 elif sys.platform == 'darwin':
     try:
-        from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        from Quartz import CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly
         print("✓ Quartz imported successfully")
         HAS_QUARTZ = True
     except ImportError as e:
@@ -76,7 +76,7 @@ try:
                     if title and title.strip():
                         stats["with_title"] += 1
                         windows.append(title)
-                        print(f"  ✓ Added to list")
+                        print("  ✓ Added to list")
                 
                 print()
                 
@@ -128,7 +128,7 @@ try:
                         seen_apps.add(owner)
                         print(f"  ✓ Added to list as: '{owner}' (app name only)")
                     else:
-                        print(f"  ⊘ Skipped (no title, app already added)")
+                        print("  ⊘ Skipped (no title, app already added)")
                 else:
                     print(f"  ⊘ Skipped (layer={layer}, size={width}x{height})")
                 

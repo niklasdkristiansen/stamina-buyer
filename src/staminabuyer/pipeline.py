@@ -16,6 +16,7 @@ from rich.table import Table
 
 from .config import EmulatorTarget
 from .emulator.screen_capture import ScreenCaptureClient
+from .settle import ScreenSettler, SettleBaseline
 from .vision.matcher import MatchResult, TemplateLibrary
 
 
@@ -49,8 +50,12 @@ class PurchaseContext:
     target: EmulatorTarget
     purchased: int = 0
     purchase_count: int = 0
-    pending_item: "StaminaItem | None" = None
+    pending_item: StaminaItem | None = None
     pending_match: MatchResult | None = None
+    consecutive_confirm_misses: int = 0
+    #: Pre-tap screen captured just before confirming, used to wait for the
+    #: purchase to register before the next item search.
+    settle_baseline: SettleBaseline | None = None
 
     @property
     def remaining(self) -> int:
@@ -139,10 +144,29 @@ def load_stamina_items(path: Path | None = None) -> list[StaminaItem]:
 class PipelineOptions:
     dry_run: bool = False
     max_retries: int = 3
-    purchase_delay_seconds: float = 1.0
+    purchase_delay_seconds: float = 1.0  # Base delay between detection retries
     jitter_seconds: float = 0.2
-    post_purchase_delay_seconds: float = 1.0  # Wait after successful purchase for UI to update
+    post_purchase_delay_seconds: float = 1.0  # Wait after confirming a purchase for the UI to update
     post_click_delay_seconds: float = 1.0  # Wait after clicking item for confirm dialog to appear
+    # With ``auto_settle`` on, ``refresh_wait_seconds`` and
+    # ``post_purchase_delay_seconds`` are *minimum* waits: afterwards we keep
+    # polling until the screen visibly changes and then holds still for
+    # ``settle_stable_seconds`` (capped at ``settle_timeout_seconds``). With
+    # it off, they are fixed sleeps.
+    auto_settle: bool = True
+    refresh_wait_seconds: float = 1.0
+    settle_stable_seconds: float = 0.4
+    settle_timeout_seconds: float = 8.0
+    settle_poll_seconds: float = 0.1
+    # Fraction of (thumbnail) pixels that must differ from the pre-tap frame
+    # for the UI to count as having reacted, and the frame-to-frame fraction
+    # below which it counts as still. Both are raised automatically when the
+    # screen has ambient animation.
+    settle_change_threshold: float = 0.02
+    settle_stable_threshold: float = 0.005
+    # Consecutive item taps without a confirm dialog before giving up. Guards
+    # against looping forever when the gem-button tap keeps missing.
+    max_confirm_misses: int = 5
     refresh_button_icon: str = "refresh"
     max_refreshes: int = 100  # Maximum times to refresh the Black Market (can take 50-100+ tries)
     template_dir: Path | None = None
@@ -160,12 +184,11 @@ class PipelineOptions:
     # resized so the UI matches template scale, and item matches use a
     # tight band around 1.0 (see ``item_scale_tolerance``).
     #
-    # The sweep covers 0.40x–2.20x. Beyond those bounds in either direction,
-    # template matching becomes noise-dominated: tiny templates cross-match
-    # arbitrary UI regions (false-positive anchors), and huge ones lose
-    # detail through upsampling (no match at all). If the diagnostic log
-    # reveals your window lands outside this band, the right fix is to
-    # regenerate templates at your preferred size, not to widen the sweep.
+    # The sweep covers 0.40x–2.20x. Beyond those bounds template matching
+    # becomes noise-dominated: tiny templates cross-match arbitrary UI
+    # regions (false-positive anchors), and huge ones lose detail through
+    # upsampling. Large windows don't need a wider sweep: calibration
+    # downscales them first (see ``reference_frame_size``).
     template_scales: tuple[float, ...] = tuple(
         round(0.40 + i * 0.05, 2) for i in range(37)  # 0.40 → 2.20 at 0.05 steps
     )
@@ -179,6 +202,16 @@ class PipelineOptions:
     # calibration quantization.
     anchor_icons: tuple[str, ...] = ("refresh",)
     anchor_min_score: float = 0.6
+    # Capture size (width, height) the templates were cut from. Each frame's
+    # UI scale is predicted from its size relative to this; anchors further
+    # than ``anchor_scale_tolerance`` from the prediction are rejected, and
+    # large frames are downscaled so any window size can be calibrated.
+    # ``None`` disables the prediction.
+    reference_frame_size: tuple[int, int] | None = (341, 633)
+    anchor_scale_tolerance: float = 0.5
+    # Where the anchor's centre may sit, as (x0, y0, x1, y1) fractions of the
+    # frame. The refresh button is horizontally centred near the bottom.
+    anchor_region: tuple[float, float, float, float] | None = (0.2, 0.4, 0.8, 1.0)
     # Tolerance around 1.0 for matching items *after* the frame has been
     # normalized to canonical scale. Calibration snaps to the nearest
     # configured scale step (0.05 above), so 0.08 gives plenty of headroom
@@ -208,6 +241,23 @@ class CancelledError(Exception):
     pass
 
 
+def build_template_library(options: PipelineOptions, console: Console | None = None) -> TemplateLibrary:
+    """Load the template library configured by ``options``.
+
+    Loading is slow (every icon × every scale), so callers running several
+    targets should build it once and pass it to each :class:`PipelineRunner`.
+    """
+    return TemplateLibrary(
+        options.template_dir,
+        threshold=options.template_threshold,
+        scales=options.template_scales,
+        grayscale=True,
+        descriptor_min_matches=options.descriptor_min_matches,
+        console=console,
+        reference_width=options.reference_width,
+    )
+
+
 class PipelineRunner:
     """Runs the purchase pipeline sequentially for each emulator."""
 
@@ -234,15 +284,13 @@ class PipelineRunner:
         # Most-recently-calibrated UI scale, reused across item/button matches
         # within a single purchase attempt. ``None`` means not yet calibrated.
         self._calibrated_scale: float | None = None
-        threshold = options.template_threshold
-        self._templates = template_library or TemplateLibrary(
-            options.template_dir,
-            threshold=threshold,
-            scales=options.template_scales,
-            grayscale=True,
-            descriptor_min_matches=options.descriptor_min_matches,
-            console=self.console,
-            reference_width=options.reference_width,
+        self._templates = template_library or build_template_library(options, self.console)
+        self._settler = ScreenSettler(
+            stable_seconds=options.settle_stable_seconds,
+            timeout_seconds=options.settle_timeout_seconds,
+            poll_seconds=options.settle_poll_seconds,
+            change_threshold=options.settle_change_threshold,
+            stable_threshold=options.settle_stable_threshold,
         )
 
     def _calibrate_from_frame(self, frame: bytes) -> float | None:
@@ -257,11 +305,7 @@ class PipelineRunner:
         anchor was almost-matched (lower ``anchor_min_score``) vs. not
         present at all (wrong screen, window outside sweep range).
         """
-        anchor_match = self._templates.calibrate_scale(
-            frame,
-            anchor_icons=self.options.anchor_icons,
-            min_score=self.options.anchor_min_score,
-        )
+        anchor_match = self._find_anchor(frame, self.options.anchor_min_score)
         if anchor_match is None:
             self._log_calibration_miss(frame)
             return None
@@ -273,32 +317,38 @@ class PipelineRunner:
         self._calibrated_scale = anchor_match.scale
         return anchor_match.scale
 
+    def _find_anchor(self, frame: bytes, min_score: float) -> MatchResult | None:
+        return self._templates.calibrate_scale(
+            frame,
+            anchor_icons=self.options.anchor_icons,
+            min_score=min_score,
+            reference_frame_size=self.options.reference_frame_size,
+            scale_tolerance=self.options.anchor_scale_tolerance,
+            anchor_region=self.options.anchor_region,
+        )
+
     def _log_calibration_miss(self, frame: bytes) -> None:
         """Re-run the anchor probe at zero threshold to surface diagnostics.
 
-        Cheap (reuses the same scale sweep) and only runs on the miss path,
-        so no impact on happy-path performance. Also saves a debug snapshot
-        when ``save_debug_screenshots`` is enabled, since the failing frame
-        is exactly what you need to diagnose a miscalibration offline.
+        Only runs on the miss path, so no impact on happy-path performance.
+        Also saves a debug snapshot when ``save_debug_screenshots`` is
+        enabled, since the failing frame is exactly what you need to
+        diagnose a miscalibration offline.
         """
-        probe = self._templates.match(
-            frame, list(self.options.anchor_icons), threshold=0.0
-        )
-        if probe:
-            best = probe[0]
+        best = self._find_anchor(frame, min_score=0.0)
+        if best is not None:
             self.console.log(
                 f"[yellow]Anchor miss: best candidate was '{best.icon}' @ "
                 f"scale {best.scale:.2f}x score {best.score:.3f} (need "
                 f"{self.options.anchor_min_score:.2f}). If score is close, "
                 f"try lowering anchor_min_score; if far below, the UI is "
-                f"probably not on the Black Market or outside the "
-                f"{min(self.options.template_scales):.2f}x–"
-                f"{max(self.options.template_scales):.2f}x sweep.[/yellow]"
+                f"probably not on the Black Market.[/yellow]"
             )
         else:
             self.console.log(
-                "[yellow]Anchor miss: no candidate at any scale. Window "
-                "may be far outside the supported size range.[/yellow]"
+                "[yellow]Anchor miss: no candidate at a plausible scale and "
+                "position. The Black Market may not be showing, or the "
+                "window may be too small.[/yellow]"
             )
 
         if self.options.save_debug_screenshots:
@@ -329,22 +379,28 @@ class PipelineRunner:
             )
             return PipelineResult(name=target.name, requested=target.stamina, purchased=target.stamina)
 
-        client = self._client_factory(target.name)
-        purchased = 0
+        ctx = PurchaseContext(target=target)
         errors: list[str] = []
 
         try:
-            purchased = self._execute_purchase_loop(client, target)
-        except Exception as exc:  # pragma: no cover - runtime defensive path
+            client = self._client_factory(target.name)
+            self._execute_purchase_loop(client, target, ctx)
+        except CancelledError:
+            raise
+        except Exception as exc:
+            # Report what was bought before the failure rather than 0.
             errors.append(str(exc))
 
-        return PipelineResult(name=target.name, requested=target.stamina, purchased=purchased, errors=errors)
+        return PipelineResult(name=target.name, requested=target.stamina, purchased=ctx.purchased, errors=errors)
 
     def _execute_purchase_loop(
-        self, client: ScreenCaptureClient, target: EmulatorTarget
+        self,
+        client: ScreenCaptureClient,
+        target: EmulatorTarget,
+        ctx: PurchaseContext | None = None,
     ) -> int:
         """Drive the purchase state machine until the target is satisfied or cancelled."""
-        ctx = PurchaseContext(target=target)
+        ctx = ctx or PurchaseContext(target=target)
         state = PurchaseState.FOCUS_WINDOW
 
         handlers: dict[PurchaseState, Callable[[ScreenCaptureClient, PurchaseContext], PurchaseState]] = {
@@ -415,18 +471,28 @@ class PipelineRunner:
     ) -> PurchaseState:
         try:
             confirm_match = self._match_with_retry(client, self.options.confirm_icon_name)
-        except RuntimeError:
+        except RuntimeError as exc:
             # No dialog appeared — the item was already owned, or the tap missed.
             # Fall back to the next find/refresh cycle after a short settle.
+            ctx.consecutive_confirm_misses += 1
+            if ctx.consecutive_confirm_misses >= self.options.max_confirm_misses:
+                raise RuntimeError(
+                    f"Tapped an item {ctx.consecutive_confirm_misses} times in a row "
+                    f"without a confirm dialog appearing. The gem-button tap is "
+                    f"probably missing; try resizing the emulator window."
+                ) from exc
             self.console.log(
                 "[yellow]⚠️ Confirm dialog not found — item may already be purchased. "
-                "Continuing...[/yellow]"
+                f"Continuing... ({ctx.consecutive_confirm_misses}/"
+                f"{self.options.max_confirm_misses})[/yellow]"
             )
             time.sleep(self.options.post_purchase_delay_seconds)
             ctx.pending_match = None
             ctx.pending_item = None
             return PurchaseState.FIND_ITEM
 
+        ctx.consecutive_confirm_misses = 0
+        ctx.settle_baseline = self._capture_settle_baseline(client)
         self._tap_center(client, confirm_match)
         return PurchaseState.RECORD_PURCHASE
 
@@ -446,13 +512,14 @@ class PipelineRunner:
 
         ctx.pending_match = None
         ctx.pending_item = None
+        baseline, ctx.settle_baseline = ctx.settle_baseline, None
 
         if ctx.is_satisfied:
             return PurchaseState.DONE
 
-        delay = self.options.post_purchase_delay_seconds
-        self.console.log(f"[dim]Waiting {delay}s for purchase to complete...[/dim]")
-        time.sleep(delay)
+        self._wait_for_screen(
+            client, baseline, self.options.post_purchase_delay_seconds, "purchase"
+        )
         return PurchaseState.FIND_ITEM
 
     def _render_summary(self, results: Sequence[PipelineResult]) -> None:
@@ -491,7 +558,7 @@ class PipelineRunner:
         normalize the frame so templates match at canonical (1.0) scale with
         a small tolerance for calibration quantization. This makes the
         pipeline genuinely resolution-agnostic: any window size within the
-        anchor sweep (0.5×–2.0× of template scale) works equivalently.
+        anchor sweep (``template_scales``) works equivalently.
 
         When calibration fails we back off and wait rather than refresh —
         tapping the refresh button on a screen that isn't the Black Market
@@ -524,10 +591,8 @@ class PipelineRunner:
                         f"{calibration_misses} attempts — anchor '"
                         f"{', '.join(self.options.anchor_icons)}' was never "
                         f"found. Check that the Black Market screen is "
-                        f"visible and the window is between "
-                        f"{min(self.options.template_scales):.2f}x and "
-                        f"{max(self.options.template_scales):.2f}x of "
-                        f"template scale. Enable save_debug_screenshots "
+                        f"visible and not covered by a popup, and that the "
+                        f"window isn't tiny. Enable save_debug_screenshots "
                         f"to capture the failing frame."
                     )
                 self.console.log(
@@ -644,10 +709,52 @@ class PipelineRunner:
             self.console.log("[yellow]Refresh button not found, continuing...[/yellow]")
             return
 
+        baseline = self._capture_settle_baseline(client)
         self._tap_center(client, refresh_match)
-        refresh_delay = 1.0
-        self.console.log(f"[dim]Waiting {refresh_delay}s for refresh...[/dim]")
-        time.sleep(refresh_delay)
+        self._wait_for_screen(client, baseline, self.options.refresh_wait_seconds, "refresh")
+
+    def _capture_settle_baseline(self, client: ScreenCaptureClient) -> SettleBaseline | None:
+        """Sample the screen before a tap so :meth:`_wait_for_screen` can detect the reaction."""
+        if not self.options.auto_settle:
+            return None
+        return self._settler.capture_baseline(client.screencap)
+
+    def _wait_for_screen(
+        self,
+        client: ScreenCaptureClient,
+        baseline: SettleBaseline | None,
+        min_wait: float,
+        label: str,
+    ) -> None:
+        """Wait for the screen to finish updating after a tap.
+
+        Without a baseline (auto-settle off, or frames couldn't be decoded)
+        this is a plain ``min_wait`` sleep.
+        """
+        if baseline is None:
+            self.console.log(f"[dim]Waiting {min_wait:.1f}s for {label}...[/dim]")
+            time.sleep(min_wait)
+            return
+
+        result = self._settler.wait(
+            client.screencap, baseline, min_wait, label, on_poll=self._check_cancelled
+        )
+        if result.settled:
+            average = self._settler.average(label)
+            self.console.log(
+                f"[dim]Screen settled {result.waited:.1f}s after {label} "
+                f"(average {average:.1f}s)[/dim]"
+            )
+        elif result.changed:
+            self.console.log(
+                f"[yellow]Screen still changing {result.waited:.1f}s after {label}; "
+                f"continuing anyway.[/yellow]"
+            )
+        else:
+            self.console.log(
+                f"[yellow]No visible change {result.waited:.1f}s after {label} — "
+                f"the tap may not have registered. Continuing.[/yellow]"
+            )
 
     def _match_with_retry(self, client: ScreenCaptureClient, icon_name: str) -> MatchResult:
         """Locate ``icon_name`` on the current screen, retrying on failure.

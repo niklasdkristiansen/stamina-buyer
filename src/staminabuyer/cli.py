@@ -38,11 +38,18 @@ def _build_runner(
     options = PipelineOptions(
         dry_run=dry_run,
         max_retries=max_retries,
-        purchase_delay_seconds=config.purchase_delay_seconds,
-        jitter_seconds=config.jitter_seconds,
         reference_width=ref_width,
         items_file=items_file,
+        **config.pipeline_overrides(),
     )
+
+    if options.auto_settle:
+        console.print(
+            f"[cyan]Refresh wait: at least {options.refresh_wait_seconds:.1f}s, then until the "
+            f"screen settles (max {options.settle_timeout_seconds:.1f}s)[/cyan]"
+        )
+    else:
+        console.print(f"[cyan]Refresh wait: fixed {options.refresh_wait_seconds:.1f}s[/cyan]")
 
     if ref_width:
         console.print(f"[cyan]Using reference width: {ref_width}px (screenshots will be normalized)[/cyan]")
@@ -71,8 +78,8 @@ def _launch_gui_or_exit() -> None:
     try:
         from .gui import launch_gui
     except ImportError as exc:
-        console.print("[red]GUI dependencies not installed.[/red]")
-        console.print("Reinstall with: pip install -e .")
+        console.print(str(exc), style="red", markup=False)
+        console.print("Reinstall with: pip install -e .  — or use the CLI: staminabuyer run --help")
         raise typer.Exit(code=1) from exc
     launch_gui()
 
@@ -165,6 +172,29 @@ def run(
         exists=True,
         help="Custom stamina item catalog (YAML). Defaults to the bundled assets/items.yaml.",
     ),
+    refresh_wait: float | None = typer.Option(
+        None,
+        "--refresh-wait",
+        min=0.0,
+        help=(
+            "Seconds to wait after tapping refresh (default 1.0). With auto-settle this is "
+            "the minimum wait; with --fixed-wait it is the exact wait."
+        ),
+    ),
+    auto_settle: bool | None = typer.Option(
+        None,
+        "--auto-settle/--fixed-wait",
+        help=(
+            "After --refresh-wait, keep waiting until the screen stops changing "
+            "(default), or treat --refresh-wait as a fixed delay."
+        ),
+    ),
+    settle_timeout: float | None = typer.Option(
+        None,
+        "--settle-timeout",
+        min=0.1,
+        help="Maximum seconds to wait for the screen to settle (default 8.0).",
+    ),
 ) -> None:
     """Buy stamina from Black Market by detecting the window and clicking automatically.
     
@@ -178,7 +208,17 @@ def run(
     """
 
     try:
-        resolved = resolve_configuration(target, config)
+        resolved = resolve_configuration(
+            target,
+            config,
+            cli_overrides={
+                "refresh_wait_seconds": refresh_wait,
+                "auto_settle": auto_settle,
+                "settle_timeout_seconds": settle_timeout,
+            },
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(f"Config file not found: {exc}") from exc
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 

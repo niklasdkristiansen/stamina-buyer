@@ -31,8 +31,9 @@ Prefer Python? `pip install -e .` from the repo (requires Python ≥ 3.11).
 | **Detect** | Click it. The tool finds your emulator window by title. |
 | **Stamina amount** | Type how much stamina you want to buy (e.g. `500`). |
 | **Add** | Adds that target to the queue. Repeat for more emulators if you want. |
+| **Refresh wait** | Seconds to wait after tapping refresh (default `1`). With **Auto** ticked, that's the minimum; the tool then keeps waiting until the screen stops changing. |
 | **Start** | Go. Live log shows every purchase as it happens. |
-| **Stop / X** | Cancels gracefully at the next safe checkpoint. |
+| **Cancel** | Cancels gracefully at the next safe checkpoint. |
 
 > ⚠️ Keep the emulator window visible for the whole run. If you
 > alt-tab over it or minimize it, the tool can't read pixels and
@@ -92,10 +93,20 @@ click after launching may be learning the scale. If subsequent clicks are
 still off, close the app, make sure the emulator isn't mid-animation,
 and relaunch.
 
-### Purchases feel too fast / rate-limited
+### It refreshes again before the new cards have loaded
 
-If you want more breathing room between clicks, use a config file with
-the CLI (see below) — the GUI uses sensible defaults.
+After tapping refresh the tool waits at least **Refresh wait** seconds,
+then (with **Auto** ticked) keeps watching the screen until the new cards
+have appeared and stopped animating, up to 8 seconds. The log shows how
+long each refresh took to settle.
+
+- If refreshes still get read too early, raise **Refresh wait** — e.g. to
+  the settle times the log reports.
+- If the log keeps saying the screen was "still changing", something on
+  screen animates constantly; untick **Auto** and set a fixed wait instead.
+
+The same options exist on the CLI (`--refresh-wait`, `--fixed-wait`,
+`--settle-timeout`) and in config files (see below).
 
 ---
 
@@ -137,15 +148,20 @@ staminabuyer run \
 targets:
   - name: "BlueStacks App Player"
     stamina: 500
-purchase_delay_seconds: 2.0   # base delay between purchase attempts
+purchase_delay_seconds: 2.0   # base delay between detection retries
 jitter_seconds: 0.5           # random +/- added to the delay
+refresh_wait_seconds: 1.5     # wait after tapping refresh (minimum, if auto_settle)
+auto_settle: true             # then keep waiting until the screen stops changing
+settle_timeout_seconds: 8.0   # never wait longer than this for it to settle
 ```
 
 ```bash
 staminabuyer run --config config.yaml
 ```
 
-CLI `--target` flags are additive with file targets.
+Every setting is optional. CLI `--target` flags are added to the file's
+targets, and CLI flags such as `--refresh-wait 2 --fixed-wait` override
+the file's settings.
 
 ### Custom item catalog
 

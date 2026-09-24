@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +11,16 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 TARGET_SEPARATOR = ":"
+
+#: Settings a config file or CLI flag may override. Anything left unset
+#: falls back to the ``PipelineOptions`` default.
+PIPELINE_OVERRIDE_FIELDS = (
+    "purchase_delay_seconds",
+    "jitter_seconds",
+    "refresh_wait_seconds",
+    "auto_settle",
+    "settle_timeout_seconds",
+)
 
 
 class EmulatorTarget(BaseModel):
@@ -23,18 +33,32 @@ class EmulatorTarget(BaseModel):
 class FileConfig(BaseModel):
     """Schema for config files loaded from YAML/JSON."""
 
-    targets: list[EmulatorTarget]
-    purchase_delay_seconds: float = Field(default=1.0, ge=0.0)
-    jitter_seconds: float = Field(default=0.2, ge=0.0)
+    targets: list[EmulatorTarget] = Field(default_factory=list)
+    purchase_delay_seconds: float | None = Field(default=None, ge=0.0)
+    jitter_seconds: float | None = Field(default=None, ge=0.0)
+    refresh_wait_seconds: float | None = Field(default=None, ge=0.0)
+    auto_settle: bool | None = None
+    settle_timeout_seconds: float | None = Field(default=None, gt=0.0)
 
 
 @dataclass(slots=True)
 class ResolvedConfiguration:
-    """Merged runtime configuration."""
+    """Merged runtime configuration. ``None`` means "use the pipeline default"."""
 
     targets: list[EmulatorTarget]
-    purchase_delay_seconds: float
-    jitter_seconds: float
+    purchase_delay_seconds: float | None = None
+    jitter_seconds: float | None = None
+    refresh_wait_seconds: float | None = None
+    auto_settle: bool | None = None
+    settle_timeout_seconds: float | None = None
+
+    def pipeline_overrides(self) -> dict[str, float | bool]:
+        """Explicitly-set settings, as keyword arguments for ``PipelineOptions``."""
+        return {
+            name: getattr(self, name)
+            for name in PIPELINE_OVERRIDE_FIELDS
+            if getattr(self, name) is not None
+        }
 
 
 def parse_target_argument(raw: str) -> EmulatorTarget:
@@ -45,7 +69,8 @@ def parse_target_argument(raw: str) -> EmulatorTarget:
             f"Malformed target '{raw}'. Expected format '<emulator_name>{TARGET_SEPARATOR}<amount>'."
         )
 
-    name, stamina_str = raw.split(TARGET_SEPARATOR, maxsplit=1)
+    # Split on the last separator so window titles may themselves contain ':'.
+    name, stamina_str = raw.rsplit(TARGET_SEPARATOR, maxsplit=1)
     try:
         stamina = int(stamina_str)
     except ValueError as exc:  # pragma: no cover - defensive branch
@@ -79,27 +104,26 @@ def load_file_config(path: Path) -> FileConfig:
 
 
 def resolve_configuration(
-    cli_targets: Sequence[str], config_path: Path | None
+    cli_targets: Sequence[str],
+    config_path: Path | None,
+    cli_overrides: Mapping[str, float | bool | None] | None = None,
 ) -> ResolvedConfiguration:
-    """Merge CLI targets with optional config file defaults."""
+    """Merge CLI targets and settings with an optional config file.
 
-    parsed_cli = parse_targets(cli_targets)
+    CLI targets are added to the file's targets; CLI settings that are not
+    ``None`` take precedence over the file's.
+    """
 
-    if config_path is None:
-        if not parsed_cli:
-            raise ValueError("Provide at least one --target or a config file with targets.")
-        return ResolvedConfiguration(parsed_cli, purchase_delay_seconds=1.0, jitter_seconds=0.2)
-
-    file_config = load_file_config(config_path)
-    targets = file_config.targets or []
-    if parsed_cli:
-        targets.extend(parsed_cli)
-
+    file_config = load_file_config(config_path) if config_path is not None else FileConfig()
+    targets = [*file_config.targets, *parse_targets(cli_targets)]
     if not targets:
-        raise ValueError("Resolved configuration contains no targets to process.")
+        raise ValueError("Provide at least one --target or a config file with targets.")
 
-    return ResolvedConfiguration(
-        targets=targets,
-        purchase_delay_seconds=file_config.purchase_delay_seconds,
-        jitter_seconds=file_config.jitter_seconds,
-    )
+    settings = {name: getattr(file_config, name) for name in PIPELINE_OVERRIDE_FIELDS}
+    for name, value in (cli_overrides or {}).items():
+        if name not in settings:
+            raise ValueError(f"Unknown setting '{name}'.")
+        if value is not None:
+            settings[name] = value
+
+    return ResolvedConfiguration(targets=targets, **settings)
